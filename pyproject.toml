@@ -1,0 +1,55 @@
+[project]
+name = "dxf2geo"
+version = "0.1.0"
+description = "Convert DXF CAD files to GIS formats like Shapefile and GeoPackage, with interactive visualisation."
+authors = [
+    { name = "Keiran Suchak", email = "ksuchak1990@yahoo.co.uk" }
+]
+readme = "README.md"
+requires-python = ">=3.8"
+
+dependencies = [
+    "geopandas",
+    "shapely",
+    "plotly",
+    "pandas"
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.envs.default]
+dependencies = [
+    "pytest",
+    "ruff",
+    "black"
+]
+
+[tool.hatch.envs.default.scripts]
+test = "pytest"
+lint = "ruff check src/ tests/"
+format = "ruff format src/ tests/"
+check-format = "ruff format --check src/ tests/"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.ruff]
+line-length = 88
+target-version = "py38"
+fix = true
+show-fixes = true
+exclude = ["__pycache__", ".venv"]
+
+[tool.black]
+line-length = 88
+target-version = ["py38"]
+exclude = '''
+/(
+    \.venv
+  | \.git
+  | \.mypy_cache
+  | __pycache__
+)/
+'''

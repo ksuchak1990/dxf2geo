@@ -1,0 +1,27 @@
+# Byte-compiled files
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+.env/
+
+# Hatch build artifacts
+dist/
+build/
+*.egg-info/
+
+# Hatch environments (optional)
+.pytest_cache/
+.hatch/
+
+# Jupyter and editor stuff
+.ipynb_checkpoints/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+
+# Output files
+output/
