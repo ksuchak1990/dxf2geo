@@ -32,6 +32,8 @@ As an example, on Ubuntu/Debian, install GDAL using the following command:
 sudo apt install gdal-bin libgdal-dev
 ```
 
+Following this, we can install the package:
+
 ```bash
 pip install dxf2geo
 ```
