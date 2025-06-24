@@ -23,7 +23,8 @@ build-backend = "hatchling.build"
 dependencies = [
     "pytest",
     "ruff",
-    "black"
+    "black",
+    "pytest-mock"
 ]
 
 [tool.hatch.envs.default.scripts]
