@@ -17,6 +17,7 @@ output spatially.
 
 - [Installation](#installation)
 - [Features](#features)
+- [Example usage](#example-usage)
 - [License](#license)
 
 ## Installation
@@ -31,7 +32,7 @@ As an example, on Ubuntu/Debian, install GDAL using the following command:
 sudo apt install gdal-bin libgdal-dev
 ```
 
-```console
+```bash
 pip install dxf2geo
 ```
 
@@ -50,7 +51,7 @@ Below is an example of using the functionality of this package on a CAD file
 This creates a set of shapefiles for of the types of geometry in a new `output/`
 directory.
 
-```{python}
+```python
 from dxf2geo.extract import extract_geometries
 from dxf2geo.visualise import (
     load_geometries,
