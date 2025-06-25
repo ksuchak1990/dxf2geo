@@ -1,4 +1,5 @@
 import subprocess
+from tqdm import tqdm
 from pathlib import Path
 
 
@@ -18,7 +19,7 @@ def extract_geometries(
     log_path = output_root / "export.log"
 
     with log_path.open("w", encoding="utf-8") as log_file:
-        for gtype in geometry_types:
+        for gtype in tqdm(geometry_types, desc="Iterating over geometries"):
             out_dir = output_root / gtype.lower()
             out_dir.mkdir(parents=True, exist_ok=True)
             shp_path = out_dir / f"{gtype.lower()}.shp"
