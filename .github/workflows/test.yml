@@ -1,0 +1,38 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.8"
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gdal-bin libgdal-dev
+        echo "CPLUS_INCLUDE_PATH=/usr/include/gdal" >> $GITHUB_ENV
+        echo "C_INCLUDE_PATH=/usr/include/gdal" >> $GITHUB_ENV
+
+    - name: Install GDAL Python binding
+      run: pip install GDAL==$(gdal-config --version)
+
+    - name: Install project and test dependencies
+      run: |
+        pip install hatch
+        hatch env create
+        hatch run pip install pytest  # adjust if you're using hatch hooks instead
+
+    - name: Run tests
+      run: hatch run pytest
