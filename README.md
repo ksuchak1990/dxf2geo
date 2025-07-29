@@ -4,6 +4,10 @@
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/dxf2geo.svg)](https://pypi.org/project/dxf2geo)
 [![Tests](https://github.com/ksuchak1990/dxf2geo/actions/workflows/test.yml/badge.svg)](https://github.com/ksuchak1990/dxf2geo/actions/workflows/test.yml)
 
+
+> [!WARNING]  
+> This package is in the early stages of development and should not be installed unless you are one of the developers.
+
 **dxf2geo** is a small Python package for converting CAD `.dxf` files into
 geospatial formats such as Shapefiles and GeoPackages, and for producing
 interactive visualisations of the extracted geometry.
