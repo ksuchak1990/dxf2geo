@@ -21,6 +21,13 @@ jobs:
           activate-environment: test-env
           use-mamba: true
 
+      - name: Install package
+        shell: bash
+        run: |
+          source "${CONDA}/etc/profile.d/conda.sh"
+          conda activate test-env
+          pip install -e .
+
       - name: Run tests with pytest
         shell: bash
         run: |
