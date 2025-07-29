@@ -22,7 +22,8 @@ jobs:
           use-mamba: true
 
       - name: Run tests with pytest
+        shell: bash
         run: |
-          source ~/miniconda3/etc/profile.d/conda.sh
+          source "${CONDA}/etc/profile.d/conda.sh"
           conda activate test-env
           pytest
