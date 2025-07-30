@@ -1,3 +1,4 @@
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Iterable, Union
@@ -21,6 +22,11 @@ def extract_geometries(
 
     dxf_path = Path(dxf_path).expanduser().resolve()
     output_root = Path(output_root).expanduser().resolve()
+
+    if shutil.which("ogr2ogr") is None:
+        raise EnvironmentError(
+            "Required executable 'ogr2ogr' not found in system PATH."
+        )
 
     output_root.mkdir(parents=True, exist_ok=True)
     log_path = output_root / "export.log"
