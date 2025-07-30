@@ -16,6 +16,7 @@ def extract_geometries(
         "MULTILINESTRING",
         "MULTIPOLYGON",
     ),
+    raise_on_error: bool = False,
 ) -> None:
 
     dxf_path = Path(dxf_path).expanduser().resolve()
@@ -51,9 +52,22 @@ def extract_geometries(
                 check=False,
             )
 
+            if result.returncode != 0:
+                log_file.write(f"[ERROR] Exit code {result.returncode}\n\n")
+                if raise_on_error:
+                    raise RuntimeError(
+                        f"ogr2ogr failed for geometry type '{gtype}' "
+                        f"with exit code {result.returncode}. See {log_path}"
+                    )
+
             log_file.write(
                 f"[STDOUT]\n{result.stdout}\n" if result.stdout else "")
             log_file.write(
                 f"[STDERR]\n{result.stderr}\n" if result.stderr else "")
             if result.returncode != 0:
                 log_file.write(f"[ERROR] Exit code {result.returncode}\n\n")
+                if raise_on_error:
+                    raise RuntimeError(
+                        f"ogr2ogr failed for geometry type '{gtype}' "
+                        f"with exit code {result.returncode}. See {log_path}"
+                    )
