@@ -1,12 +1,15 @@
 import subprocess
-from tqdm import tqdm
 from pathlib import Path
+from typing import Iterable, Union
+from tqdm import tqdm
+
+PathLike = Union[str, Path]
 
 
 def extract_geometries(
-    dxf_path: Path,
-    output_root: Path,
-    geometry_types=(
+    dxf_path: PathLike,
+    output_root: PathLike,
+    geometry_types: Iterable[str] = (
         "POINT",
         "LINESTRING",
         "POLYGON",
@@ -14,7 +17,10 @@ def extract_geometries(
         "MULTIPOLYGON",
     ),
 ) -> None:
-    dxf_path = dxf_path.expanduser().resolve()
+
+    dxf_path = Path(dxf_path).expanduser().resolve()
+    output_root = Path(output_root).expanduser().resolve()
+
     output_root.mkdir(parents=True, exist_ok=True)
     log_path = output_root / "export.log"
 
@@ -45,7 +51,9 @@ def extract_geometries(
                 check=False,
             )
 
-            log_file.write(f"[STDOUT]\n{result.stdout}\n" if result.stdout else "")
-            log_file.write(f"[STDERR]\n{result.stderr}\n" if result.stderr else "")
+            log_file.write(
+                f"[STDOUT]\n{result.stdout}\n" if result.stdout else "")
+            log_file.write(
+                f"[STDERR]\n{result.stderr}\n" if result.stderr else "")
             if result.returncode != 0:
                 log_file.write(f"[ERROR] Exit code {result.returncode}\n\n")
