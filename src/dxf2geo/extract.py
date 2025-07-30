@@ -96,10 +96,8 @@ def extract_geometries(
                         f"with exit code {result.returncode}. See {log_path}"
                     )
 
-            log_file.write(
-                f"[STDOUT]\n{result.stdout}\n" if result.stdout else "")
-            log_file.write(
-                f"[STDERR]\n{result.stderr}\n" if result.stderr else "")
+            log_file.write(f"[STDOUT]\n{result.stdout}\n" if result.stdout else "")
+            log_file.write(f"[STDERR]\n{result.stderr}\n" if result.stderr else "")
             if result.returncode != 0:
                 log_file.write(f"[ERROR] Exit code {result.returncode}\n\n")
                 if raise_on_error:
