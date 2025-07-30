@@ -2,6 +2,7 @@ import shutil
 import subprocess
 from pathlib import Path
 from typing import Iterable, Union
+
 from tqdm import tqdm
 
 PathLike = Union[str, Path]
@@ -56,6 +57,8 @@ def extract_geometries(
                 stderr=subprocess.PIPE,
                 text=True,
                 check=False,
+                encoding="utf-8",
+                errors="replace",
             )
 
             if result.returncode != 0:
