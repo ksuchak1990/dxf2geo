@@ -8,6 +8,62 @@ from tqdm import tqdm
 PathLike = Union[str, Path]
 
 
+def _run_ogr2ogr(
+    args: list[str],
+    label: str,
+    log_file,
+    raise_on_error: bool,
+    log_path: Path,
+) -> None:
+    """
+    Run an ogr2ogr subprocess and write output to the provided log file.
+
+    This function executes the given ogr2ogr command, logs its stdout and
+    stderr, and optionally raises a RuntimeError on failure.
+
+    Parameters
+    ----------
+    args : list of str
+        Command-line arguments to pass to ogr2ogr.
+    label : str
+        Label to include in the log for identifying this operation.
+    log_file : file-like
+        Open file object for logging command output.
+    raise_on_error : bool
+        If True, raise a RuntimeError on non-zero exit code.
+    log_path : Path
+        Path to the log file, used in error messages.
+
+    Raises
+    ------
+    RuntimeError
+        If the subprocess exits with a non-zero code and raise_on_error is True.
+    """
+    log_file.write(f"=== Exporting {label} ===\n")
+
+    result = subprocess.run(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        encoding="utf-8",
+        errors="replace",
+    )
+
+    if result.stdout:
+        log_file.write(f"[STDOUT]\n{result.stdout}\n")
+    if result.stderr:
+        log_file.write(f"[STDERR]\n{result.stderr}\n")
+    if result.returncode != 0:
+        log_file.write(f"[ERROR] Exit code {result.returncode}\n\n")
+        if raise_on_error:
+            raise RuntimeError(
+                f"ogr2ogr failed for {label} with exit code {result.returncode}. "
+                f"See log at {log_path}"
+            )
+
+
 def extract_geometries(
     dxf_path: PathLike,
     output_root: PathLike,
@@ -19,14 +75,14 @@ def extract_geometries(
         "MULTIPOLYGON",
     ),
     raise_on_error: bool = False,
+    flatten: bool = False,
 ) -> None:
     """
-    Extract specified geometry types from a DXF file using ogr2ogr.
+    Extract geometries from a DXF file into shapefiles using ogr2ogr.
 
-    For each geometry type, this function invokes `ogr2ogr` to extract matching
-    features from the input DXF file and writes them to a shapefile in a
-    corresponding subdirectory under the specified output root. Standard output
-    and errors from the process are written to `export.log`.
+    Supports either exporting one shapefile per geometry type, or exporting
+    all geometries into a single shapefile. Outputs are saved under the
+    specified root directory, and process logs are written to `export.log`.
 
     Parameters
     ----------
@@ -35,40 +91,50 @@ def extract_geometries(
     output_root : PathLike
         Root directory where output shapefiles will be saved.
     geometry_types : iterable of str, optional
-        Geometry types to extract (e.g. "POINT", "POLYGON"). Defaults to a
-        standard list of common OGR types.
+        Geometry types to extract. Only used if flatten is False.
+        Defaults to common OGR types.
     raise_on_error : bool, optional
-        If True, raises a RuntimeError on ogr2ogr failure. If False, logs
-        the error and continues. Default is False.
+        If True, raise a RuntimeError if ogr2ogr fails. Default is False.
+    flatten : bool, optional
+        If True, extract all geometries into a single shapefile named
+        'all_geometries.shp'. If False, create one shapefile per geometry type.
 
     Raises
     ------
     EnvironmentError
         If `ogr2ogr` is not found in the system PATH.
     RuntimeError
-        If a subprocess fails and `raise_on_error` is True.
+        If ogr2ogr fails and `raise_on_error` is True.
     """
+
     dxf_path = Path(dxf_path).expanduser().resolve()
     output_root = Path(output_root).expanduser().resolve()
+    output_root.mkdir(parents=True, exist_ok=True)
+    log_path = output_root / "export.log"
 
     if shutil.which("ogr2ogr") is None:
         raise EnvironmentError(
             "Required executable 'ogr2ogr' not found in system PATH."
         )
 
-    output_root.mkdir(parents=True, exist_ok=True)
-    log_path = output_root / "export.log"
-
     with log_path.open("w", encoding="utf-8") as log_file:
-        for gtype in tqdm(geometry_types, desc="Iterating over geometries"):
-            out_dir = output_root / gtype.lower()
-            out_dir.mkdir(parents=True, exist_ok=True)
-            shp_path = out_dir / f"{gtype.lower()}.shp"
-
-            log_file.write(f"=== Exporting {gtype} to {shp_path} ===\n")
-
-            result = subprocess.run(
-                [
+        if flatten:
+            shp_path = output_root / "all_geometries.shp"
+            args = [
+                "ogr2ogr",
+                "-f",
+                "ESRI Shapefile",
+                str(shp_path),
+                str(dxf_path),
+                "-skipfailures",
+            ]
+            _run_ogr2ogr(args, "all geometries", log_file, raise_on_error, log_path)
+        else:
+            for gtype in tqdm(geometry_types, desc="Iterating over geometries"):
+                out_dir = output_root / gtype.lower()
+                out_dir.mkdir(parents=True, exist_ok=True)
+                shp_path = out_dir / f"{gtype.lower()}.shp"
+                args = [
                     "ogr2ogr",
                     "-f",
                     "ESRI Shapefile",
@@ -79,29 +145,5 @@ def extract_geometries(
                     "-where",
                     f"OGR_GEOMETRY='{gtype}'",
                     "-skipfailures",
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=False,
-                encoding="utf-8",
-                errors="replace",
-            )
-
-            if result.returncode != 0:
-                log_file.write(f"[ERROR] Exit code {result.returncode}\n\n")
-                if raise_on_error:
-                    raise RuntimeError(
-                        f"ogr2ogr failed for geometry type '{gtype}' "
-                        f"with exit code {result.returncode}. See {log_path}"
-                    )
-
-            log_file.write(f"[STDOUT]\n{result.stdout}\n" if result.stdout else "")
-            log_file.write(f"[STDERR]\n{result.stderr}\n" if result.stderr else "")
-            if result.returncode != 0:
-                log_file.write(f"[ERROR] Exit code {result.returncode}\n\n")
-                if raise_on_error:
-                    raise RuntimeError(
-                        f"ogr2ogr failed for geometry type '{gtype}' "
-                        f"with exit code {result.returncode}. See {log_path}"
-                    )
+                ]
+                _run_ogr2ogr(args, gtype, log_file, raise_on_error, log_path)
