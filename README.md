@@ -3,7 +3,7 @@
 [![PyPI - Version](https://img.shields.io/pypi/v/dxf2geo.svg)](https://pypi.org/project/dxf2geo)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/dxf2geo.svg)](https://pypi.org/project/dxf2geo)
 [![Tests](https://github.com/ksuchak1990/dxf2geo/actions/workflows/test.yml/badge.svg)](https://github.com/ksuchak1990/dxf2geo/actions/workflows/test.yml)
-
+[![Lint](https://github.com/ksuchak1990/dxf2geo/actions/workflows/clean_code.yml/badge.svg)](https://github.com/ksuchak1990/dxf2geo/actions/workflows/clean_code.yml)
 
 > [!WARNING]  
 > This package is in the early stages of development and should not be installed unless you are one of the developers.
