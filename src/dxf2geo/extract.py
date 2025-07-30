@@ -20,7 +20,34 @@ def extract_geometries(
     ),
     raise_on_error: bool = False,
 ) -> None:
+    """
+    Extract specified geometry types from a DXF file using ogr2ogr.
 
+    For each geometry type, this function invokes `ogr2ogr` to extract matching
+    features from the input DXF file and writes them to a shapefile in a
+    corresponding subdirectory under the specified output root. Standard output
+    and errors from the process are written to `export.log`.
+
+    Parameters
+    ----------
+    dxf_path : PathLike
+        Path to the input DXF file.
+    output_root : PathLike
+        Root directory where output shapefiles will be saved.
+    geometry_types : iterable of str, optional
+        Geometry types to extract (e.g. "POINT", "POLYGON"). Defaults to a
+        standard list of common OGR types.
+    raise_on_error : bool, optional
+        If True, raises a RuntimeError on ogr2ogr failure. If False, logs
+        the error and continues. Default is False.
+
+    Raises
+    ------
+    EnvironmentError
+        If `ogr2ogr` is not found in the system PATH.
+    RuntimeError
+        If a subprocess fails and `raise_on_error` is True.
+    """
     dxf_path = Path(dxf_path).expanduser().resolve()
     output_root = Path(output_root).expanduser().resolve()
 
