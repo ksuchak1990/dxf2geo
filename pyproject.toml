@@ -14,7 +14,8 @@ dependencies = [
     "geopandas",
     "shapely",
     "plotly",
-    "pandas"
+    "pandas",
+    "fiona"
 ]
 
 [build-system]

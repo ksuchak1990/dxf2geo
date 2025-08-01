@@ -126,6 +126,12 @@ def extract_geometries(
     if fmt not in ("ESRI SHAPEFILE", "GPKG"):
         raise ValueError("Unsupported output format. Use 'ESRI Shapefile' or 'GPKG'.")
 
+    if flatten and fmt == "ESRI SHAPEFILE":
+        raise ValueError(
+            "Flattened output to a single Shapefile is not supported "
+            "(mixed geometry types). Use output_format='GPKG' or set flatten=False."
+        )
+
     with log_path.open("w", encoding="utf-8") as log_file:
         if flatten:
             ext = ".shp" if fmt == "ESRI SHAPEFILE" else ".gpkg"
