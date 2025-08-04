@@ -3,16 +3,19 @@ from pathlib import Path
 from dxf2geo import extract
 
 
-def test_extract_calls_subprocess(tmp_path: Path, mocker):
-    dxf_path = tmp_path / "test.dxf"
-    dxf_path.write_text("dummy dxf content")
+def write_minimal_dxf(path: Path) -> None:
+    content = (
+        "0\nSECTION\n2\nENTITIES\n"
+        "0\nPOINT\n8\n0\n10\n0.0\n20\n0.0\n30\n0.0\n"
+        "0\nLINE\n8\n0\n10\n0.0\n20\n0.0\n30\n0.0\n11\n1.0\n21\n1.0\n31\n0.0\n"
+        "0\nENDSEC\n0\nEOF\n"
+    )
+    path.write_text(content, encoding="ascii")
 
-    output_dir = tmp_path / "output"
 
-    mock_run = mocker.patch("subprocess.run")
-    extract.extract_geometries(dxf_path, output_dir)
-
-    assert mock_run.called
-    called_args = mock_run.call_args[0][0]
-    assert "ogr2ogr" in called_args
-    assert str(dxf_path) in called_args
+def test_extract_writes_gpkg(tmp_path):
+    dxf = tmp_path / "test.dxf"
+    write_minimal_dxf(dxf)
+    out = tmp_path / "out"
+    extract.extract_geometries(dxf, out, flatten=True, output_format="GPKG")
+    assert (out / "all_geometries.gpkg").exists()

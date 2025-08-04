@@ -152,12 +152,15 @@ def load_geometries(
 
     # Choose a CRS (first non-null). Users may reproject afterwards if needed.
     crs = next((g.crs for g in gdfs if g.crs is not None), None)
-    return gpd.GeoDataFrame(pd.concat(gdfs, ignore_index=True), crs=crs)
+    gdf = gpd.GeoDataFrame(pd.concat(gdfs, ignore_index=True), crs=crs)
+    return gdf
 
 
 def filter_modelspace_lines(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     paper_space_indicator = 1.0
-    return gdf.loc[gdf.get("PaperSpace", 0) != paper_space_indicator]
+    paper = gdf.get("PaperSpace", pd.Series(0, index=gdf.index))
+    paper = pd.to_numeric(paper, errors="coerce").fillna(0).astype(int)
+    return gdf.loc[paper != int(bool(paper_space_indicator))]
 
 
 def plot_geometries(gdf: gpd.GeoDataFrame, output_html: Path | str) -> None:
