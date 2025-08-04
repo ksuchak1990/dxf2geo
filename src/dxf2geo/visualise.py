@@ -156,7 +156,6 @@ def load_geometries(
     return gdf
 
 
-
 def filter_modelspace_lines(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     paper_space_indicator = 1.0
     paper = gdf.get("PaperSpace", pd.Series(0, index=gdf.index))
