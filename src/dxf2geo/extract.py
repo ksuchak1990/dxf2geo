@@ -408,6 +408,7 @@ def _gdal_handler(err_class, err_no, msg, *, logger, suppress_contains):
     if err_class == gdal.CE_Warning:
         if any(s in msg for s in suppress_contains):
             logger.debug("Suppressed GDAL warning: %s", msg)
+
         else:
             logger.warning("GDAL warning: %s", msg)
         return
