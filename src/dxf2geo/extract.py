@@ -1,3 +1,15 @@
+"""
+Extract geometries from DXF files into GIS formats using GDAL/OGR.
+
+This module provides tools for converting DXF vector data into structured GIS
+outputs (Shapefile or GeoPackage), with optional filtering by geometry type,
+layer name, spatial extent, and attribute values.
+
+The main entry point is `extract_geometries`. The module is designed for batch
+processing and supports flattened or partitioned output modes. Error handling,
+field sanitisation, and logging are implemented to support robust automated use.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -16,24 +28,31 @@ PathLike = Union[str, Path]
 
 # Exceptions
 class ExtractError(Exception):
-    pass
+    """Base exception for all extract-related errors."""
 
 
 class InputOpenError(ExtractError):
-    pass
+    """Raised when a DXF file cannot be opened or contains no usable layers."""
 
 
 class DriverNotFoundError(ExtractError):
-    pass
+    """Raised when the requested GDAL/OGR output driver is not available."""
 
 
 class OutputCreateError(ExtractError):
-    pass
+    """Raised when an output data source or layer cannot be created."""
 
 
 # Data structures
 @dataclass(frozen=True)
 class FilterOptions:
+    """
+    Options for filtering DXF features prior to export.
+
+    Filters may be applied by layer name, geometry size, bounding box, or
+    field values. All filters are optional and independently configurable.
+    """
+
     include_layers: Optional[tuple[str, ...]] = None
     exclude_layers: Optional[tuple[str, ...]] = None
     min_area: Optional[float] = None
@@ -48,6 +67,14 @@ class FilterOptions:
 
 @dataclass(frozen=True)
 class ExtractOptions:
+    """
+    Configuration for a single DXF-to-GIS extraction task.
+
+    Encapsulates all parameters required for processing and exporting
+    geometries from a DXF file, including input/output paths, format settings,
+    geometry types to extract, and optional feature-level filters.
+    """
+
     dxf_path: Path
     output_root: Path
     flatten: bool
@@ -59,6 +86,13 @@ class ExtractOptions:
 
 @dataclass(frozen=True)
 class SourceData:
+    """
+    Represents an open DXF source and its first layer.
+
+    Contains the OGR dataset, primary layer, and associated spatial reference
+    object (if available). Used internally during extraction.
+    """
+
     dataset: ogr.DataSource
     layer: ogr.Layer
     spatial_ref: "ogr.osr.SpatialReference | None"
@@ -81,7 +115,37 @@ def extract_geometries(
     filter_options: Optional[FilterOptions] = None,
 ) -> None:
     """
-    Extract geometries from a DXF file into GIS outputs using GDAL/OGR Python bindings.
+    Extract geometries from a DXF file and write them to GIS format outputs.
+
+    Supports selective export by geometry type, optional flattening to a single
+    layer, and configurable filtering. Outputs are written as Shapefiles or
+    GeoPackages, depending on the specified format.
+
+    Parameters
+    ----------
+    dxf_path : PathLike
+        Path to the input DXF file.
+    output_root : PathLike
+        Directory where output files and logs will be written.
+    geometry_types : Iterable[str], optional
+        Geometry types to extract (e.g. "POINT", "LINESTRING"). Defaults to
+        common types.
+    raise_on_error : bool, optional
+        If True, raise an exception when no features are written for any output.
+        Default is False.
+    flatten : bool, optional
+        If True, export all geometries into a single GeoPackage layer. Must be
+        False for Shapefile output. Default is False.
+    output_format : str, optional
+        Output format: either "ESRI Shapefile" or "GPKG" (case-insensitive).
+        Default is "ESRI Shapefile".
+    filter_options : FilterOptions, optional
+        Optional filters for layer names, geometry size, bounding box, or field
+        values.
+
+    Returns
+    -------
+    None
     """
     output_format_upper = output_format.upper()
     if output_format_upper not in ("ESRI SHAPEFILE", "GPKG"):
@@ -134,6 +198,12 @@ def extract_geometries(
 
 # Setup / IO helpers
 def _configure_logging(log_path: Path) -> None:
+    """
+    Configure file-based logging for the extraction process.
+
+    Creates or overwrites a log file at the specified path and attaches a
+    timestamped logging handler to the module-level logger.
+    """
     logger = logging.getLogger("dxf2geo.extract")
     logger.setLevel(logging.INFO)
     logger.handlers.clear()
@@ -143,6 +213,24 @@ def _configure_logging(log_path: Path) -> None:
 
 
 def _open_source(dxf_path: Path) -> SourceData:
+    """
+    Open a DXF file and retrieve its first layer and spatial reference.
+
+    Parameters
+    ----------
+    dxf_path : Path
+        Path to the input DXF file.
+
+    Returns
+    -------
+    SourceData
+        An object containing the dataset, layer, and spatial reference.
+
+    Raises
+    ------
+    InputOpenError
+        If the DXF file cannot be opened or contains no layers.
+    """
     dataset = ogr.Open(str(dxf_path), 0)  # read-only
     if dataset is None:
         raise InputOpenError(f"Failed to open DXF dataset: {dxf_path}")
@@ -156,6 +244,24 @@ def _open_source(dxf_path: Path) -> SourceData:
 
 
 def _get_driver(driver_name: str) -> ogr.Driver:
+    """
+    Retrieve an OGR driver by name.
+
+    Parameters
+    ----------
+    driver_name : str
+        Name of the desired GDAL/OGR driver (e.g. "GPKG", "ESRI Shapefile").
+
+    Returns
+    -------
+    ogr.Driver
+        The corresponding driver instance.
+
+    Raises
+    ------
+    DriverNotFoundError
+        If no matching driver is found.
+    """
     driver = ogr.GetDriverByName(driver_name)
     if driver is None:
         raise DriverNotFoundError(f"OGR driver not found: {driver_name}")
@@ -165,6 +271,28 @@ def _get_driver(driver_name: str) -> ogr.Driver:
 def _create_output_dataset(
     driver: ogr.Driver, output_path: Path, is_shapefile: bool
 ) -> ogr.DataSource:
+    """
+    Create a new OGR output data source, overwriting if it already exists.
+
+    Parameters
+    ----------
+    driver : ogr.Driver
+        The driver used to create the data source.
+    output_path : Path
+        Target file path for the output.
+    is_shapefile : bool
+        If True, remove sidecar files (e.g. .dbf, .shx) before creation.
+
+    Returns
+    -------
+    ogr.DataSource
+        A writable OGR data source.
+
+    Raises
+    ------
+    OutputCreateError
+        If the output file cannot be created.
+    """
     # Emulate ogr2ogr overwrite behaviour
     if output_path.exists():
         if is_shapefile:
@@ -180,6 +308,23 @@ def _create_output_dataset(
 
 
 def _copy_layer_schema(source_layer: ogr.Layer, output_layer: ogr.Layer) -> None:
+    """
+    Copy the field schema from a source layer to an output layer.
+
+    Field types, widths, and precisions are preserved. Fails on first error.
+
+    Parameters
+    ----------
+    source_layer : ogr.Layer
+        The input layer to read field definitions from.
+    output_layer : ogr.Layer
+        The target layer to which fields will be added.
+
+    Raises
+    ------
+    OutputCreateError
+        If any field fails to be created on the output layer.
+    """
     source_definition = source_layer.GetLayerDefn()
     for i in range(source_definition.GetFieldCount()):
         field_defn = source_definition.GetFieldDefn(i)
@@ -207,6 +352,30 @@ def _export_flattened(
     options: ExtractOptions,
     logger: logging.Logger,
 ) -> None:
+    """
+    Export all features into a single flattened GeoPackage layer.
+
+    Used when `flatten=True` and the output format is GPKG. All geometries are
+    written to one layer named "all_geometries".
+
+    Parameters
+    ----------
+    source_layer : ogr.Layer
+        The source layer containing features to export.
+    spatial_ref
+        The spatial reference object for the output layer.
+    options : ExtractOptions
+        Extraction settings including filters and paths.
+    logger : logging.Logger
+        Logger instance for output and error reporting.
+
+    Raises
+    ------
+    OutputCreateError
+        If the output layer or file cannot be created.
+    ExtractError
+        If no features are written and `raise_on_error` is set.
+    """
     assert options.driver_name == "GPKG", "flattened output only supported for GPKG"
     driver = _get_driver(options.driver_name)
 
@@ -248,6 +417,30 @@ def _export_partitioned(
     options: ExtractOptions,
     logger: logging.Logger,
 ) -> None:
+    """
+    Export features into separate layers or files by geometry type.
+
+    Each geometry type (e.g. "POINT", "LINESTRING") is written to a separate
+    Shapefile or GeoPackage, depending on `options.driver_name`.
+
+    Parameters
+    ----------
+    source_layer : ogr.Layer
+        The input DXF layer.
+    spatial_ref
+        The spatial reference object for all outputs.
+    options : ExtractOptions
+        Settings controlling geometry types, filters, and output format.
+    logger : logging.Logger
+        Logger instance for messages and warnings.
+
+    Raises
+    ------
+    OutputCreateError
+        If any output layer fails to be created.
+    ExtractError
+        If no features are written for any geometry and `raise_on_error` is set.
+    """
     driver = _get_driver(options.driver_name)
     is_shapefile = options.driver_name == "ESRI Shapefile"
 
@@ -310,6 +503,32 @@ def _stream_features(
     field_index_mapping: list[Optional[int]],
     filter_options: Optional[FilterOptions] = None,
 ) -> tuple[int, int]:
+    """
+    Stream features from the source layer to the output layer with optional filtering.
+
+    Copies each feature's geometry and selected fields. Skips features that do
+    not match the specified geometry type or filter criteria.
+
+    Parameters
+    ----------
+    source_layer : ogr.Layer
+        Layer to read features from.
+    output_layer : ogr.Layer
+        Layer to write accepted features to.
+    logger : logging.Logger
+        Logger for warning messages when features are skipped.
+    filter_geometry_name : str, optional
+        Geometry type name to filter on (e.g. "POLYGON"), or None to accept all.
+    field_index_mapping : list of Optional[int]
+        Mapping from source field indices to output field indices.
+    filter_options : FilterOptions, optional
+        Additional per-feature filters.
+
+    Returns
+    -------
+    tuple[int, int]
+        A tuple (written, skipped) indicating the number of features processed.
+    """
     written = 0
     skipped = 0
 
@@ -349,17 +568,65 @@ def _stream_features(
 
 
 def _geometry_name_equals(geometry: Optional[ogr.Geometry], target_name: str) -> bool:
+    """
+    Check whether a geometry matches the target geometry name.
+
+    Comparison is case-insensitive.
+
+    Parameters
+    ----------
+    geometry : ogr.Geometry or None
+        Geometry to test.
+    target_name : str
+        Expected geometry name.
+
+    Returns
+    -------
+    bool
+        True if names match, False otherwise.
+    """
     return bool(geometry) and geometry.GetGeometryName().upper() == target_name.upper()
 
 
 def _normalise_field_name(name: str) -> str:
+    """
+    Sanitise a field name for use in output formats.
+
+    Replaces non-alphanumeric characters with underscores to improve
+    compatibility across GIS formats.
+
+    Parameters
+    ----------
+    name : str
+        Raw field name.
+
+    Returns
+    -------
+    str
+        Sanitised field name.
+    """
     # Alphanumeric + underscore, no spaces, conservative for cross-compat
     norm = re.sub(r"[^A-Za-z0-9_]", "_", name)
     return norm
 
 
 def _make_shapefile_field_names(source_names: list[str]) -> list[str]:
-    """Create unique, <=10-char field names suitable for Shapefiles."""
+    """
+    Create valid, unique field names for Shapefiles from source field names.
+
+    Ensures all names are uppercase, ≤10 characters, and conflict-free.
+    Appends numeric suffixes if required to maintain uniqueness.
+
+    Parameters
+    ----------
+    source_names : list of str
+        Original field names from the source layer.
+
+    Returns
+    -------
+    list of str
+        Sanitised and truncated field names suitable for Shapefiles.
+    """
     used = set()
     result: list[str] = []
     for raw in source_names:
@@ -383,8 +650,31 @@ def _copy_layer_schema_with_mapping(
     for_shapefile: bool,
 ) -> list[Optional[int]]:
     """
-    Copy fields from source to output. For Shapefiles, enforce 10-char names and uniqueness.
-    Returns a list mapping source field index -> destination field index (or None if dropped).
+    Copy the field schema from a source layer to an output layer.
+
+    Produces a mapping from source field indices to destination indices,
+    accounting for field name constraints. Shapefiles are restricted to
+    10-character uppercase field names and must be made unique.
+
+    Parameters
+    ----------
+    source_layer : ogr.Layer
+        The input layer from which to read field definitions.
+    output_layer : ogr.Layer
+        The output layer to receive new fields.
+    for_shapefile : bool
+        If True, enforce Shapefile naming rules.
+
+    Returns
+    -------
+    list of Optional[int]
+        A mapping from source field index to output field index, or None if
+        the field could not be created.
+
+    Raises
+    ------
+    OutputCreateError
+        If any output field fails to be created.
     """
     source_def = source_layer.GetLayerDefn()
     source_names = [
@@ -422,10 +712,38 @@ def _copy_layer_schema_with_mapping(
 
 # Filtering helpers (top-level; no inner functions)
 def _norm_layer(name: Optional[str]) -> str:
+    """
+    Normalise a layer name to lowercase with surrounding whitespace removed.
+
+    Parameters
+    ----------
+    name : str or None
+        Original layer name.
+
+    Returns
+    -------
+    str
+        Normalised layer name, or empty string if None.
+    """
     return (name or "").strip().lower()
 
 
 def _layer_allowed(layer_name: Optional[str], opts: Optional[FilterOptions]) -> bool:
+    """
+    Determine whether a feature's layer passes inclusion/exclusion filters.
+
+    Parameters
+    ----------
+    layer_name : str or None
+        Name of the layer the feature belongs to.
+    opts : FilterOptions or None
+        Filtering criteria to apply.
+
+    Returns
+    -------
+    bool
+        True if the layer is allowed under the specified filters.
+    """
     if not opts:
         return True
     ln = _norm_layer(layer_name)
@@ -440,6 +758,24 @@ def _layer_allowed(layer_name: Optional[str], opts: Optional[FilterOptions]) -> 
 
 
 def _geom_allowed(g: Optional[ogr.Geometry], opts: Optional[FilterOptions]) -> bool:
+    """
+    Determine whether a geometry passes spatial and structural filters.
+
+    Evaluates emptiness, area, length, and bounding box constraints. Rules vary
+    depending on geometry type.
+
+    Parameters
+    ----------
+    g : ogr.Geometry or None
+        Geometry to test.
+    opts : FilterOptions or None
+        Filtering criteria.
+
+    Returns
+    -------
+    bool
+        True if the geometry satisfies all filter conditions.
+    """
     if not opts:
         return True
     if not g:
@@ -473,6 +809,23 @@ def _geom_allowed(g: Optional[ogr.Geometry], opts: Optional[FilterOptions]) -> b
 
 
 def _fields_allowed(feat: ogr.Feature, opts: Optional[FilterOptions]) -> bool:
+    """
+    Determine whether a feature passes field value filters.
+
+    Excludes features based on specific disallowed values in named fields.
+
+    Parameters
+    ----------
+    feat : ogr.Feature
+        Feature to test.
+    opts : FilterOptions or None
+        Filtering rules for attribute values.
+
+    Returns
+    -------
+    bool
+        True if the feature passes all field-based filters.
+    """
     if not opts or not opts.exclude_field_values:
         return True
     for fld, disallowed in opts.exclude_field_values.items():
@@ -486,6 +839,23 @@ def _fields_allowed(feat: ogr.Feature, opts: Optional[FilterOptions]) -> bool:
 
 
 def _feature_allowed(feat: ogr.Feature, opts: Optional[FilterOptions]) -> bool:
+    """
+    Check whether a feature should be included based on all filters.
+
+    Applies layer name, field value, and geometry-based filtering in sequence.
+
+    Parameters
+    ----------
+    feat : ogr.Feature
+        Feature to evaluate.
+    opts : FilterOptions or None
+        Filtering options.
+
+    Returns
+    -------
+    bool
+        True if the feature meets all inclusion criteria.
+    """
     if not opts:
         return True
     try:
@@ -500,6 +870,25 @@ def _feature_allowed(feat: ogr.Feature, opts: Optional[FilterOptions]) -> bool:
 
 
 def _gdal_handler(err_class, err_no, msg, *, logger, suppress_contains):
+    """
+    Custom GDAL error handler that redirects GDAL messages to the logger.
+
+    Handles debug, warning, and error messages from GDAL. Suppresses selected
+    warnings based on substring matching.
+
+    Parameters
+    ----------
+    err_class : int
+        GDAL error class constant (e.g. CE_Warning, CE_Failure).
+    err_no : int
+        GDAL error number constant (e.g. CPLE_OpenFailed).
+    msg : str
+        Error message text.
+    logger : logging.Logger
+        Logger instance to receive the output.
+    suppress_contains : Iterable[str]
+        Substrings used to suppress specific warning messages.
+    """
     # err_class: CE_*
     # err_no:    CPLE_*
     if err_class == gdal.CE_Debug:
@@ -524,6 +913,20 @@ def _gdal_handler(err_class, err_no, msg, *, logger, suppress_contains):
 
 @contextmanager
 def gdal_log_to_logger(logger, suppress_contains=("Block ", "DXF: Skipping")):
+    """
+    Context manager that redirects GDAL errors to a Python logger.
+
+    Installs a temporary GDAL error handler that logs messages and selectively
+    suppresses known noisy warnings.
+
+    Parameters
+    ----------
+    logger : logging.Logger
+        Logger to capture GDAL messages.
+    suppress_contains : tuple of str, optional
+        Substrings of warning messages to suppress. Default includes common
+        DXF and block-related messages.
+    """
     handler = partial(
         _gdal_handler, logger=logger, suppress_contains=tuple(suppress_contains)
     )
