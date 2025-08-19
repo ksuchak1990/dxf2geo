@@ -47,14 +47,65 @@ class OutputCreateError(ExtractError):
 @dataclass(frozen=True)
 class FilterOptions:
     """
-    Options for filtering DXF features prior to export.
+    Filtering options applied to features prior to export.
 
-    Filters may be applied by layer name, geometry size, bounding box, or
-    field values. All filters are optional and independently configurable.
+    Parameters
+    ----------
+    include_layers : tuple of str, optional
+        Exact layer names to include. Matching is case-insensitive. If any
+        include names or patterns are provided, a layer must match at least
+        one to pass.
+    exclude_layers : tuple of str, optional
+        Exact layer names to exclude. Matching is case-insensitive. Any match
+        vetoes inclusion.
+    include_layer_patterns : tuple of str, optional
+        Regular expressions applied to the original layer name with
+        ``re.IGNORECASE``. If any include names or patterns are provided,
+        a layer must match at least one to pass.
+    exclude_layer_patterns : tuple of str, optional
+        Regular expressions applied to the original layer name with
+        ``re.IGNORECASE``. Any match vetoes inclusion.
+    drop_empty : bool, optional
+        If ``True``, drop features whose geometry is empty.
+    drop_zero_geom : bool, optional
+        If ``True``, drop features whose polygon area or line length evaluates
+        to zero.
+    min_area : float, optional
+        Minimum polygon area. Polygons (and multipolygons) with area below this
+        threshold are dropped.
+    min_length : float, optional
+        Minimum line length. Lines (and multilines) with length below this
+        threshold are dropped.
+    bbox : tuple of float, optional
+        Axis-aligned bounding box as ``(minx, miny, maxx, maxy)`` in the
+        dataset’s coordinate reference system. Features whose envelopes do not
+        intersect this box are dropped.
+    exclude_field_values : dict[str, set[str]], optional
+        Mapping of field name to a set of disallowed string values. Features
+        with matching field values are dropped.
+
+    Notes
+    -----
+    Inclusion is an optional gate: if *any* includes (names or patterns) are
+    supplied, the layer must match at least one. Exclusions always take
+    precedence; any exclude (name or pattern) match rejects the layer, even if
+    it matched an include.
+
+    Examples
+    --------
+    Restrict to annotation layers and exclude temporary layers:
+
+    >>> FilterOptions(
+    ...     include_layer_patterns=(r"^a-.*-anno$",),
+    ...     exclude_layer_patterns=(r"_tmp$",),
+    ... )
     """
 
     include_layers: Optional[tuple[str, ...]] = None
     exclude_layers: Optional[tuple[str, ...]] = None
+    # Filter based on regex
+    include_layer_patterns: Optional[tuple[str, ...]] = None
+    exclude_layer_patterns: Optional[tuple[str, ...]] = None
     min_area: Optional[float] = None
     min_length: Optional[float] = None
     drop_empty: bool = True
@@ -730,30 +781,66 @@ def _norm_layer(name: Optional[str]) -> str:
 
 def _layer_allowed(layer_name: Optional[str], opts: Optional[FilterOptions]) -> bool:
     """
-    Determine whether a feature's layer passes inclusion/exclusion filters.
+    Determine whether a layer name passes include/exclude filters.
 
     Parameters
     ----------
     layer_name : str or None
-        Name of the layer the feature belongs to.
+        The source layer name. ``None`` is treated as an empty string.
     opts : FilterOptions or None
-        Filtering criteria to apply.
+        Active filter configuration. If ``None``, the layer is allowed.
 
     Returns
     -------
     bool
-        True if the layer is allowed under the specified filters.
+        ``True`` if the layer passes the filters, ``False`` otherwise.
+
+    Notes
+    -----
+    Behaviour follows two rules:
+
+    1. **Inclusion gate (optional)**: if any includes (exact names or regular
+       expressions) are provided, the layer must match at least one.
+    2. **Exclusion veto (always)**: any exclude (exact name or regular
+       expression) match rejects the layer, even if it was included.
+
+    Exact-name checks are performed against a normalised lower-case copy of the
+    name. Regular expressions are applied to the original name with
+    ``re.IGNORECASE``.
+
+    Examples
+    --------
+    >>> opts = FilterOptions(
+    ...     include_layer_patterns=(r"^road_",),
+    ...     exclude_layer_patterns=(r"_tmp$",),
+    ... )
+    >>> _layer_allowed("road_primary", opts)
+    True
+    >>> _layer_allowed("road_primary_tmp", opts)
+    False
     """
     if not opts:
         return True
-    ln = _norm_layer(layer_name)
-    inc = tuple(map(str.lower, opts.include_layers or ()))
-    exc = tuple(map(str.lower, opts.exclude_layers or ()))
-    if inc:
-        if ln not in inc:
+
+    ln = (layer_name or "").strip().lower()
+
+    inc_names = set(map(str.lower, opts.include_layers or ()))
+    exc_names = set(map(str.lower, opts.exclude_layers or ()))
+
+    inc_pats = [re.compile(p, re.I) for p in (opts.include_layer_patterns or ())]
+    exc_pats = [re.compile(p, re.I) for p in (opts.exclude_layer_patterns or ())]
+
+    if inc_names or inc_pats:
+        if ln not in inc_names and not any(
+            p.search(layer_name or "") for p in inc_pats
+        ):
             return False
-    if exc and ln in exc:
+
+    if ln in exc_names:
         return False
+    if any(p.search(layer_name or "") for p in exc_pats):
+        return False
+
     return True
 
 
