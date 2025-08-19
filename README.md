@@ -94,6 +94,62 @@ output/
 └── export.log
 ```
 
+## Layer filtering
+
+## Current filter options
+
+At present we can filter CAD layers based on a number of different criteria.
+
+### Layer name (exact, case-insensitive)
+
+```python
+FilterOptions(
+    include_layers=("roads", "buildings"),
+    exclude_layers=("defpoints", "tmp"),
+)
+```
+
+### Geometry size/structure
+
+```python
+# Drop empty geometries and zero-area/length features
+FilterOptions(drop_empty=True, drop_zero_geom=True)
+
+# Minimum polygon area
+FilterOptions(min_area=5.0)
+
+# Minimum line length
+FilterOptions(min_length=10.0)
+```
+
+### Spatial bounding box
+
+```python
+# (minx, miny, maxx, maxy)
+FilterOptions(bbox=(430000.0, 420000.0, 435000.0, 425000.0))
+```
+
+### Attribute-value exclusions (exact match)
+
+```python
+# Exclude features where fields have disallowed values
+FilterOptions(exclude_field_values={
+    "EntityType": {"TEXT", "MTEXT"},
+    "Linetype": {"HIDDEN"},
+})
+```
+
+### Geometry type selection (at extraction call)
+
+```python
+extract_geometries(
+    dxf_path,
+    output_root,
+    geometry_types=("POINT", "LINESTRING", "POLYGON", "MULTILINESTRING", "MULTIPOLYGON"),
+    filter_options=FilterOptions(...),
+)
+```
+
 ## License
 
 `dxf2geo` is distributed under the terms of the
