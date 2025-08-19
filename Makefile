@@ -5,3 +5,6 @@ clean-code:
 
 test:
 	pytest .
+
+docs:
+	pdoc ./src/dxf2geo --docformat numpy
