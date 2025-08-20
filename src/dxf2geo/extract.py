@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Iterable, Optional, Union
 
 from osgeo import gdal, ogr
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 PathLike = Union[str, Path]
 
@@ -533,7 +533,13 @@ def _export_partitioned(
     driver = _get_driver(options.driver_name)
     is_shapefile = options.driver_name == "ESRI Shapefile"
 
-    for geometry_name in tqdm(options.geometry_types, desc="Iterating over geometries"):
+    for geometry_name in tqdm(
+        options.geometry_types,
+        desc="Iterating over geometries",
+        dynamic_ncols=True,
+        leave=True,
+        mininterval=0.2,
+    ):
         geometry_wkb = _GEOMETRY_NAME_TO_WKB.get(geometry_name.upper(), ogr.wkbUnknown)
 
         if is_shapefile:
@@ -545,7 +551,7 @@ def _export_partitioned(
             output_path = options.output_root / f"{geometry_name.lower()}.gpkg"
             output_layer_name = geometry_name.lower()
 
-        logger.info("Exporting %s to %s", geometry_name, output_path)
+        # logger.info("Exporting %s", geometry_name)
 
         output_dataset = _create_output_dataset(
             driver, output_path, is_shapefile=is_shapefile
@@ -574,7 +580,9 @@ def _export_partitioned(
                 filter_options=options.filter_options,
             )
 
-            logger.info("Written %s: %d, Skipped: %d", geometry_name, written, skipped)
+            # logger.info(
+            #     "Written %s: %d, Skipped: %d", geometry_name, written, skipped
+            # )
 
             if options.raise_on_error and written == 0:
                 raise ExtractError(f"No features written for '{geometry_name}'")
