@@ -248,19 +248,57 @@ def extract_geometries(
 
 
 # Setup / IO helpers
-def _configure_logging(log_path: Path) -> None:
+def _configure_logging(
+    log_path: Path, *, console_level: int | None = logging.INFO
+) -> None:
     """
-    Configure file-based logging for the extraction process.
+    Configure logging to both file and console.
 
-    Creates or overwrites a log file at the specified path and attaches a
-    timestamped logging handler to the module-level logger.
+    Creates/overwrites a log file at ``log_path`` and attaches two handlers to
+    the module logger ``"dxf2geo.extract"``:
+
+    - A file handler capturing verbose output (DEBUG and above) with timestamps.
+    - An optional console (stream) handler for immediate visibility. By default,
+      it emits INFO and above with a concise format. Set ``console_level=None``
+      to disable console output.
+
+    Parameters
+    ----------
+    log_path : Path
+        Path to the log file to write (e.g. ``export.log``).
+    console_level : int | None, optional
+        Logging threshold for console output. Use standard ``logging`` levels
+        (e.g. ``logging.INFO``, ``logging.WARNING``). If ``None``, no console
+        handler is attached.
+
+    Notes
+    -----
+    The logger’s handler list is cleared before configuration so that calling
+    this function multiple times in the same process does not result in
+    duplicate handlers or repeated log messages.
     """
     logger = logging.getLogger("dxf2geo.extract")
-    logger.setLevel(logging.INFO)
+    # Capture everything; handlers decide what to emit.
+    logger.setLevel(logging.DEBUG)
     logger.handlers.clear()
-    handler = logging.FileHandler(log_path, encoding="utf-8")
-    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-    logger.addHandler(handler)
+
+    # File handler (verbose, timestamped)
+    file_h = logging.FileHandler(log_path, encoding="utf-8")
+    file_h.setLevel(logging.DEBUG)
+    file_h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    logger.addHandler(file_h)
+
+    # Optional console handler (concise)
+    if console_level is not None:
+        console_h = logging.StreamHandler()
+        console_h.setLevel(console_level)
+        console_h.setFormatter(
+            logging.Formatter(
+                "%(asctime)s | %(filename)s > %(levelname)s > %(message)s",
+                datefmt="%H:%M:%S",
+            )
+        )
+        logger.addHandler(console_h)
 
 
 def _open_source(dxf_path: Path) -> SourceData:
