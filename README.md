@@ -45,7 +45,7 @@ pip install dxf2geo
 
 ## Features
 
-- Converts DXF files to Shapefile format using `ogr2ogr` (via subprocess),
+- Converts DXF files to common vector formats (e.g. Shapefile, GeoPackage),
 - Supports geometry filtering by type (e.g., LINESTRING, POLYGON),
 - Skips invalid geometries,
 - Visualises output geometries in an interactive Plotly-based HTML map,
