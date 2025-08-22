@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dxf2geo"
-version = "0.1.0"
+version = "0.1.2rc1"
 description = "Convert CAD DXF data into geospatial formats and visualisations using GeoPandas/Pyogrio."
 readme = "README.md"
 requires-python = ">=3.10"
