@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Iterable, Optional, Union
 
 from osgeo import gdal, ogr
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 PathLike = Union[str, Path]
 
@@ -47,14 +47,65 @@ class OutputCreateError(ExtractError):
 @dataclass(frozen=True)
 class FilterOptions:
     """
-    Options for filtering DXF features prior to export.
+    Filtering options applied to features prior to export.
 
-    Filters may be applied by layer name, geometry size, bounding box, or
-    field values. All filters are optional and independently configurable.
+    Parameters
+    ----------
+    include_layers : tuple of str, optional
+        Exact layer names to include. Matching is case-insensitive. If any
+        include names or patterns are provided, a layer must match at least
+        one to pass.
+    exclude_layers : tuple of str, optional
+        Exact layer names to exclude. Matching is case-insensitive. Any match
+        vetoes inclusion.
+    include_layer_patterns : tuple of str, optional
+        Regular expressions applied to the original layer name with
+        ``re.IGNORECASE``. If any include names or patterns are provided,
+        a layer must match at least one to pass.
+    exclude_layer_patterns : tuple of str, optional
+        Regular expressions applied to the original layer name with
+        ``re.IGNORECASE``. Any match vetoes inclusion.
+    drop_empty : bool, optional
+        If ``True``, drop features whose geometry is empty.
+    drop_zero_geom : bool, optional
+        If ``True``, drop features whose polygon area or line length evaluates
+        to zero.
+    min_area : float, optional
+        Minimum polygon area. Polygons (and multipolygons) with area below this
+        threshold are dropped.
+    min_length : float, optional
+        Minimum line length. Lines (and multilines) with length below this
+        threshold are dropped.
+    bbox : tuple of float, optional
+        Axis-aligned bounding box as ``(minx, miny, maxx, maxy)`` in the
+        dataset’s coordinate reference system. Features whose envelopes do not
+        intersect this box are dropped.
+    exclude_field_values : dict[str, set[str]], optional
+        Mapping of field name to a set of disallowed string values. Features
+        with matching field values are dropped.
+
+    Notes
+    -----
+    Inclusion is an optional gate: if *any* includes (names or patterns) are
+    supplied, the layer must match at least one. Exclusions always take
+    precedence; any exclude (name or pattern) match rejects the layer, even if
+    it matched an include.
+
+    Examples
+    --------
+    Restrict to annotation layers and exclude temporary layers:
+
+    >>> FilterOptions(
+    ...     include_layer_patterns=(r"^a-.*-anno$",),
+    ...     exclude_layer_patterns=(r"_tmp$",),
+    ... )
     """
 
     include_layers: Optional[tuple[str, ...]] = None
     exclude_layers: Optional[tuple[str, ...]] = None
+    # Filter based on regex
+    include_layer_patterns: Optional[tuple[str, ...]] = None
+    exclude_layer_patterns: Optional[tuple[str, ...]] = None
     min_area: Optional[float] = None
     min_length: Optional[float] = None
     drop_empty: bool = True
@@ -197,19 +248,57 @@ def extract_geometries(
 
 
 # Setup / IO helpers
-def _configure_logging(log_path: Path) -> None:
+def _configure_logging(
+    log_path: Path, *, console_level: int | None = logging.INFO
+) -> None:
     """
-    Configure file-based logging for the extraction process.
+    Configure logging to both file and console.
 
-    Creates or overwrites a log file at the specified path and attaches a
-    timestamped logging handler to the module-level logger.
+    Creates/overwrites a log file at ``log_path`` and attaches two handlers to
+    the module logger ``"dxf2geo.extract"``:
+
+    - A file handler capturing verbose output (DEBUG and above) with timestamps.
+    - An optional console (stream) handler for immediate visibility. By default,
+      it emits INFO and above with a concise format. Set ``console_level=None``
+      to disable console output.
+
+    Parameters
+    ----------
+    log_path : Path
+        Path to the log file to write (e.g. ``export.log``).
+    console_level : int | None, optional
+        Logging threshold for console output. Use standard ``logging`` levels
+        (e.g. ``logging.INFO``, ``logging.WARNING``). If ``None``, no console
+        handler is attached.
+
+    Notes
+    -----
+    The logger’s handler list is cleared before configuration so that calling
+    this function multiple times in the same process does not result in
+    duplicate handlers or repeated log messages.
     """
     logger = logging.getLogger("dxf2geo.extract")
-    logger.setLevel(logging.INFO)
+    # Capture everything; handlers decide what to emit.
+    logger.setLevel(logging.DEBUG)
     logger.handlers.clear()
-    handler = logging.FileHandler(log_path, encoding="utf-8")
-    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-    logger.addHandler(handler)
+
+    # File handler (verbose, timestamped)
+    file_h = logging.FileHandler(log_path, encoding="utf-8")
+    file_h.setLevel(logging.DEBUG)
+    file_h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    logger.addHandler(file_h)
+
+    # Optional console handler (concise)
+    if console_level is not None:
+        console_h = logging.StreamHandler()
+        console_h.setLevel(console_level)
+        console_h.setFormatter(
+            logging.Formatter(
+                "%(asctime)s | %(filename)s > %(levelname)s > %(message)s",
+                datefmt="%H:%M:%S",
+            )
+        )
+        logger.addHandler(console_h)
 
 
 def _open_source(dxf_path: Path) -> SourceData:
@@ -444,7 +533,13 @@ def _export_partitioned(
     driver = _get_driver(options.driver_name)
     is_shapefile = options.driver_name == "ESRI Shapefile"
 
-    for geometry_name in tqdm(options.geometry_types, desc="Iterating over geometries"):
+    for geometry_name in tqdm(
+        options.geometry_types,
+        desc="Iterating over geometries",
+        dynamic_ncols=True,
+        leave=True,
+        mininterval=0.2,
+    ):
         geometry_wkb = _GEOMETRY_NAME_TO_WKB.get(geometry_name.upper(), ogr.wkbUnknown)
 
         if is_shapefile:
@@ -456,7 +551,7 @@ def _export_partitioned(
             output_path = options.output_root / f"{geometry_name.lower()}.gpkg"
             output_layer_name = geometry_name.lower()
 
-        logger.info("Exporting %s to %s", geometry_name, output_path)
+        # logger.info("Exporting %s", geometry_name)
 
         output_dataset = _create_output_dataset(
             driver, output_path, is_shapefile=is_shapefile
@@ -485,7 +580,9 @@ def _export_partitioned(
                 filter_options=options.filter_options,
             )
 
-            logger.info("Written %s: %d, Skipped: %d", geometry_name, written, skipped)
+            # logger.info(
+            #     "Written %s: %d, Skipped: %d", geometry_name, written, skipped
+            # )
 
             if options.raise_on_error and written == 0:
                 raise ExtractError(f"No features written for '{geometry_name}'")
@@ -730,30 +827,66 @@ def _norm_layer(name: Optional[str]) -> str:
 
 def _layer_allowed(layer_name: Optional[str], opts: Optional[FilterOptions]) -> bool:
     """
-    Determine whether a feature's layer passes inclusion/exclusion filters.
+    Determine whether a layer name passes include/exclude filters.
 
     Parameters
     ----------
     layer_name : str or None
-        Name of the layer the feature belongs to.
+        The source layer name. ``None`` is treated as an empty string.
     opts : FilterOptions or None
-        Filtering criteria to apply.
+        Active filter configuration. If ``None``, the layer is allowed.
 
     Returns
     -------
     bool
-        True if the layer is allowed under the specified filters.
+        ``True`` if the layer passes the filters, ``False`` otherwise.
+
+    Notes
+    -----
+    Behaviour follows two rules:
+
+    1. **Inclusion gate (optional)**: if any includes (exact names or regular
+       expressions) are provided, the layer must match at least one.
+    2. **Exclusion veto (always)**: any exclude (exact name or regular
+       expression) match rejects the layer, even if it was included.
+
+    Exact-name checks are performed against a normalised lower-case copy of the
+    name. Regular expressions are applied to the original name with
+    ``re.IGNORECASE``.
+
+    Examples
+    --------
+    >>> opts = FilterOptions(
+    ...     include_layer_patterns=(r"^road_",),
+    ...     exclude_layer_patterns=(r"_tmp$",),
+    ... )
+    >>> _layer_allowed("road_primary", opts)
+    True
+    >>> _layer_allowed("road_primary_tmp", opts)
+    False
     """
     if not opts:
         return True
-    ln = _norm_layer(layer_name)
-    inc = tuple(map(str.lower, opts.include_layers or ()))
-    exc = tuple(map(str.lower, opts.exclude_layers or ()))
-    if inc:
-        if ln not in inc:
+
+    ln = (layer_name or "").strip().lower()
+
+    inc_names = set(map(str.lower, opts.include_layers or ()))
+    exc_names = set(map(str.lower, opts.exclude_layers or ()))
+
+    inc_pats = [re.compile(p, re.I) for p in (opts.include_layer_patterns or ())]
+    exc_pats = [re.compile(p, re.I) for p in (opts.exclude_layer_patterns or ())]
+
+    if inc_names or inc_pats:
+        if ln not in inc_names and not any(
+            p.search(layer_name or "") for p in inc_pats
+        ):
             return False
-    if exc and ln in exc:
+
+    if ln in exc_names:
         return False
+    if any(p.search(layer_name or "") for p in exc_pats):
+        return False
+
     return True
 
 
