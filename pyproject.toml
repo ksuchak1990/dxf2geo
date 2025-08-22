@@ -39,6 +39,11 @@ dev = [
   "black",
   "build",
   "twine",
+  "ezdxf",
+  "geopandas",
+  "shapely", 
+  "pyproj", 
+  "plotly",
 ]
 
 [project.urls]
