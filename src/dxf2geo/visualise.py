@@ -20,9 +20,8 @@ Notes
 - Layer discovery for GeoPackage files uses :func:`pyogrio.list_layers`.
 """
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import List, Sequence, Tuple
 
 import geopandas as gpd
 import pandas as pd
@@ -209,7 +208,7 @@ def _fallback_scan_top_level(root: Path) -> list[gpd.GeoDataFrame]:
     return gdfs
 
 
-def _coords_to_xy(seq: Sequence[Sequence[float]]) -> Tuple[List[float], List[float]]:
+def _coords_to_xy(seq: Sequence[Sequence[float]]) -> tuple[list[float], list[float]]:
     """
     Split a coordinate sequence into separate X and Y lists.
 
