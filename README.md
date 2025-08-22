@@ -23,26 +23,8 @@ output spatially.
 - [Installation](#installation)
 - [Features](#features)
 - [Example usage](#example-usage)
+- [Filtering options](#layer-filtering)
 - [License](#license)
-
-## Installation
-
-> **Requires GDAL installed on the system.**
-
-Install GDAL **before** installing Python dependencies.
-
-As an example, on Ubuntu/Debian, install GDAL using the following command:
-
-```bash
-sudo apt install gdal-bin libgdal-dev
-```
-
-Following this, we can install the package:
-
-```bash
-pip install dxf2geo
-```
-
 
 ## Installation
 
@@ -124,8 +106,6 @@ output/
 ```
 
 ## Layer filtering
-
-## Current filter options
 
 At present we can filter CAD layers based on a number of different criteria.
 
