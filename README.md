@@ -70,24 +70,23 @@ This creates a set of shapefiles for of the types of geometry in a new `output/`
 directory.
 
 ```python
+# Imports
 from dxf2geo.extract import extract_geometries
 from dxf2geo.visualise import (
     load_geometries,
-    filter_modelspace_lines,
-    remove_short_axis_aligned_lines,
     plot_geometries,
 )
 from pathlib import Path
 
-input_dxf = Path("~/Downloads/example.dxf").expanduser()
+# Define paths
+input_dxf = Path("./example.dxf").expanduser()
 output_dir = Path("output")
 
+# Process CAD file
 extract_geometries(input_dxf, output_dir)
 
+# Produce `plotly` html figure
 gdf = load_geometries(output_dir)
-gdf = filter_modelspace_lines(gdf)
-gdf = remove_short_axis_aligned_lines(gdf)
-
 plot_geometries(gdf, output_dir / "geometry_preview.html")
 ```
 
@@ -115,6 +114,20 @@ At present we can filter CAD layers based on a number of different criteria.
 FilterOptions(
     include_layers=("roads", "buildings"),
     exclude_layers=("defpoints", "tmp"),
+)
+```
+
+### Layer name (regular expressions)
+
+We can also filter layers using **regular expressions** (applied to the CAD
+layer name).
+
+```python
+FilterOptions(
+    # Include any "roads" or "road" layer (case-insensitive), and any layer starting with "bldg_"
+    include_layer_patterns=(r"(?i)^roads?$", r"^bldg_.*"),
+    # Exclude layers named "defpoints" (any case) or prefixed with "tmp_"
+    exclude_layer_patterns=(r"(?i)^defpoints$", r"^tmp_"),
 )
 ```
 
