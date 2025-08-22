@@ -12,16 +12,16 @@ field sanitisation, and logging are implemented to support robust automated use.
 
 from __future__ import annotations
 
-import logging
-import re
+from collections.abc import Iterable
 from dataclasses import dataclass
+import logging
 from pathlib import Path
-from typing import Iterable, Optional, Union
+import re
 
 import geopandas as gpd
 from tqdm.auto import tqdm
 
-PathLike = Union[str, Path]
+PathLike = str | Path
 
 
 # Exceptions
@@ -79,18 +79,18 @@ class FilterOptions:
         with matching field values are dropped.
     """
 
-    include_layers: Optional[tuple[str, ...]] = None
-    exclude_layers: Optional[tuple[str, ...]] = None
-    include_layer_patterns: Optional[tuple[str, ...]] = None
-    exclude_layer_patterns: Optional[tuple[str, ...]] = None
-    min_area: Optional[float] = None
-    min_length: Optional[float] = None
+    include_layers: tuple[str, ...] | None = None
+    exclude_layers: tuple[str, ...] | None = None
+    include_layer_patterns: tuple[str, ...] | None = None
+    exclude_layer_patterns: tuple[str, ...] | None = None
+    min_area: float | None = None
+    min_length: float | None = None
     drop_empty: bool = True
     drop_zero_geom: bool = True
     # (minx, miny, maxx, maxy)
-    bbox: Optional[tuple[float, float, float, float]] = None
+    bbox: tuple[float, float, float, float] | None = None
     # Exact-match field exclusions, e.g. {"EntityType": {"TEXT", "MTEXT"}}
-    exclude_field_values: Optional[dict[str, set[str]]] = None
+    exclude_field_values: dict[str, set[str]] | None = None
 
 
 @dataclass(frozen=True)
@@ -105,7 +105,7 @@ class ExtractOptions:
     driver_name: str  # "ESRI Shapefile" or "GPKG"
     geometry_types: tuple[str, ...]
     raise_on_error: bool
-    filter_options: Optional[FilterOptions] = None
+    filter_options: FilterOptions | None = None
 
 
 # Public API
@@ -122,8 +122,8 @@ def extract_geometries(
     raise_on_error: bool = False,
     flatten: bool = False,
     output_format: str = "ESRI Shapefile",
-    filter_options: Optional[FilterOptions] = None,
-    assume_crs: Optional[Union[int, str]] = None,
+    filter_options: FilterOptions | None = None,
+    assume_crs: int | str | None = None,
 ) -> None:
     """
     Extract geometries from a DXF file and write them to GIS format outputs.
@@ -253,7 +253,7 @@ def _configure_logging(
         logger.addHandler(console_h)
 
 
-def _read_dxf(dxf_path: Path, fo: Optional[FilterOptions]) -> gpd.GeoDataFrame:
+def _read_dxf(dxf_path: Path, fo: FilterOptions | None) -> gpd.GeoDataFrame:
     """
     Read DXF into a GeoDataFrame, applying bbox early when provided.
     """
@@ -268,9 +268,7 @@ def _read_dxf(dxf_path: Path, fo: Optional[FilterOptions]) -> gpd.GeoDataFrame:
 
 
 # Filtering helpers
-def _apply_filters(
-    gdf: gpd.GeoDataFrame, fo: Optional[FilterOptions]
-) -> gpd.GeoDataFrame:
+def _apply_filters(gdf: gpd.GeoDataFrame, fo: FilterOptions | None) -> gpd.GeoDataFrame:
     """
     Apply layer/regex, emptiness, size, bbox (defensive), and field value filters.
     """
@@ -484,7 +482,7 @@ def _apply_shapefile_field_rules(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """
     cols = [c for c in gdf.columns if c != gdf.geometry.name]
     new_cols = _make_shapefile_field_names(cols)
-    rename_map = dict(zip(cols, new_cols))
+    rename_map = dict(zip(cols, new_cols, strict=False))
     if not rename_map:
         return gdf
     return gdf.rename(columns=rename_map, copy=True)

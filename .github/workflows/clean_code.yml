@@ -1,32 +1,29 @@
-name: Ruff Lint and Format
+name: Ruff
 
 on:
   push:
-    paths:
-      - "**.py"
+    branches: [main]
   pull_request:
-    paths:
-      - "**.py"
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ruff-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   ruff:
-    name: Ruff Checks
+    name: Ruff checks
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: astral-sh/ruff-action@v3
         with:
-          python-version: "3.13"
+          version: "0.5.7"
+          args: "format --check"
 
-      - name: Install Ruff
-        run: pip install ruff
-
-      - name: Check formatting with Ruff
-        run: ruff format --check .
-
-      - name: Run Ruff linting with GitHub annotations
-        run: ruff check --output-format=github .
+      - uses: astral-sh/ruff-action@v3
+        with:
+          version: "0.5.7"
+          args: "check"
