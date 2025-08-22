@@ -43,6 +43,35 @@ Following this, we can install the package:
 pip install dxf2geo
 ```
 
+
+## Installation
+
+`dxf2geo` uses the GDAL Python bindings (`osgeo.*`). 
+On supported platforms, `pip install dxf2geo` will pull a compatible `GDAL`
+wheel from PyPI.
+
+```bash
+pip install dxf2geo
+```
+
+If your platform does not have a prebuilt GDAL wheel, install GDAL from your
+system/package manager first (or via Conda), then install dxf2geo:
+
+```
+sudo apt install gdal-bin libgdal-dev
+pip install dxf2geo
+```
+
+Before usage, it may be worth verifying your installation to ensure that GDAL is
+installed:
+
+```bash
+python -c "from osgeo import gdal, ogr; print('GDAL', gdal.VersionInfo(), 'DXF driver:', bool(ogr.GetDriverByName('DXF')))"
+```
+
+If the installation has worked, you should see something like `GDAL ##### DXF
+driver: True`.
+
 ## Features
 
 - Converts DXF files to common vector formats (e.g. Shapefile, GeoPackage),
