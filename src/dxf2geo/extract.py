@@ -1,9 +1,9 @@
 """
-Extract geometries from DXF files into GIS formats using GDAL/OGR.
+Extract geometries from DXF files into GIS formats using GeoPandas/Pyogrio.
 
-This module provides tools for converting DXF vector data into structured GIS
-outputs (Shapefile or GeoPackage), with optional filtering by geometry type,
-layer name, spatial extent, and attribute values.
+This module converts DXF vector data into structured GIS outputs (Shapefile or
+GeoPackage), with optional filtering by geometry type, layer name (exact or
+regex), spatial extent, geometry size, and attribute values.
 
 The main entry point is `extract_geometries`. The module is designed for batch
 processing and supports flattened or partitioned output modes. Error handling,
@@ -14,13 +14,11 @@ from __future__ import annotations
 
 import logging
 import re
-from contextlib import contextmanager
 from dataclasses import dataclass
-from functools import partial
 from pathlib import Path
 from typing import Iterable, Optional, Union
 
-from osgeo import gdal, ogr
+import geopandas as gpd
 from tqdm.auto import tqdm
 
 PathLike = Union[str, Path]
@@ -35,12 +33,8 @@ class InputOpenError(ExtractError):
     """Raised when a DXF file cannot be opened or contains no usable layers."""
 
 
-class DriverNotFoundError(ExtractError):
-    """Raised when the requested GDAL/OGR output driver is not available."""
-
-
 class OutputCreateError(ExtractError):
-    """Raised when an output data source or layer cannot be created."""
+    """Raised when an output file or layer cannot be created."""
 
 
 # Data structures
@@ -78,32 +72,15 @@ class FilterOptions:
         threshold are dropped.
     bbox : tuple of float, optional
         Axis-aligned bounding box as ``(minx, miny, maxx, maxy)`` in the
-        dataset’s coordinate reference system. Features whose envelopes do not
-        intersect this box are dropped.
+        dataset’s coordinate reference system. Used for fast, server-side
+        filtering during read, and re-applied defensively after read.
     exclude_field_values : dict[str, set[str]], optional
         Mapping of field name to a set of disallowed string values. Features
         with matching field values are dropped.
-
-    Notes
-    -----
-    Inclusion is an optional gate: if *any* includes (names or patterns) are
-    supplied, the layer must match at least one. Exclusions always take
-    precedence; any exclude (name or pattern) match rejects the layer, even if
-    it matched an include.
-
-    Examples
-    --------
-    Restrict to annotation layers and exclude temporary layers:
-
-    >>> FilterOptions(
-    ...     include_layer_patterns=(r"^a-.*-anno$",),
-    ...     exclude_layer_patterns=(r"_tmp$",),
-    ... )
     """
 
     include_layers: Optional[tuple[str, ...]] = None
     exclude_layers: Optional[tuple[str, ...]] = None
-    # Filter based on regex
     include_layer_patterns: Optional[tuple[str, ...]] = None
     exclude_layer_patterns: Optional[tuple[str, ...]] = None
     min_area: Optional[float] = None
@@ -120,10 +97,6 @@ class FilterOptions:
 class ExtractOptions:
     """
     Configuration for a single DXF-to-GIS extraction task.
-
-    Encapsulates all parameters required for processing and exporting
-    geometries from a DXF file, including input/output paths, format settings,
-    geometry types to extract, and optional feature-level filters.
     """
 
     dxf_path: Path
@@ -135,21 +108,7 @@ class ExtractOptions:
     filter_options: Optional[FilterOptions] = None
 
 
-@dataclass(frozen=True)
-class SourceData:
-    """
-    Represents an open DXF source and its first layer.
-
-    Contains the OGR dataset, primary layer, and associated spatial reference
-    object (if available). Used internally during extraction.
-    """
-
-    dataset: ogr.DataSource
-    layer: ogr.Layer
-    spatial_ref: "ogr.osr.SpatialReference | None"
-
-
-# Public functions
+# Public API
 def extract_geometries(
     dxf_path: PathLike,
     output_root: PathLike,
@@ -164,13 +123,10 @@ def extract_geometries(
     flatten: bool = False,
     output_format: str = "ESRI Shapefile",
     filter_options: Optional[FilterOptions] = None,
+    assume_crs: Optional[Union[int, str]] = None,
 ) -> None:
     """
     Extract geometries from a DXF file and write them to GIS format outputs.
-
-    Supports selective export by geometry type, optional flattening to a single
-    layer, and configurable filtering. Outputs are written as Shapefiles or
-    GeoPackages, depending on the specified format.
 
     Parameters
     ----------
@@ -183,20 +139,18 @@ def extract_geometries(
         common types.
     raise_on_error : bool, optional
         If True, raise an exception when no features are written for any output.
-        Default is False.
     flatten : bool, optional
         If True, export all geometries into a single GeoPackage layer. Must be
-        False for Shapefile output. Default is False.
+        False for Shapefile output.
     output_format : str, optional
         Output format: either "ESRI Shapefile" or "GPKG" (case-insensitive).
-        Default is "ESRI Shapefile".
     filter_options : FilterOptions, optional
         Optional filters for layer names, geometry size, bounding box, or field
         values.
-
-    Returns
-    -------
-    None
+    assume_crs : int | str | None, optional
+        If provided and the input DXF lacks a CRS, assign this CRS to the
+        GeoDataFrame prior to writing (e.g. 3857, "EPSG:27700"). The function
+        does not override an existing CRS; it logs and ignores the hint.
     """
     output_format_upper = output_format.upper()
     if output_format_upper not in ("ESRI SHAPEFILE", "GPKG"):
@@ -214,9 +168,6 @@ def extract_geometries(
     _configure_logging(log_path)
     logger = logging.getLogger("dxf2geo.extract")
 
-    # Make GDAL raise Python exceptions instead of silent error codes
-    gdal.UseExceptions()
-
     options = ExtractOptions(
         dxf_path=dxf_path,
         output_root=output_root,
@@ -229,22 +180,49 @@ def extract_geometries(
         filter_options=filter_options,
     )
 
-    logger.info("Opening DXF: %s", dxf_path)
-    with gdal_log_to_logger(logger):
-        source = _open_source(dxf_path)
+    logger.info("Opening DXF with GeoPandas/Pyogrio: %s", dxf_path)
+    try:
+        gdf = _read_dxf(dxf_path, options.filter_options)
+    except Exception as e:
+        raise InputOpenError(f"Failed to read DXF: {dxf_path} ({e})") from e
 
-        try:
-            if options.flatten:
-                _export_flattened(source.layer, source.spatial_ref, options, logger)
-            else:
-                _export_partitioned(source.layer, source.spatial_ref, options, logger)
-        finally:
-            # Explicitly drop GDAL handles
-            source_layer = None  # noqa: F841
-            source_dataset = None  # noqa: F841
+    # Assign a CRS if the source lacks one and the caller supplied a hint
+    if assume_crs is not None:
+        if gdf.crs is None:
+            try:
+                gdf = gdf.set_crs(assume_crs, allow_override=True)
+                logger.info("Assigned CRS %r to dataset with no CRS.", assume_crs)
+            except Exception as e:
+                if options.raise_on_error:
+                    raise ExtractError(
+                        f"Failed to set CRS to {assume_crs!r}: {e}"
+                    ) from e
+                logger.warning("Failed to set CRS to %r: %s", assume_crs, e)
+        else:
+            logger.info("CRS already present (%s); 'assume_crs' hint ignored.", gdf.crs)
+
+    if gdf.empty:
+        if options.raise_on_error:
+            raise ExtractError("No features read from DXF.")
+        logger.warning("No features read from DXF; nothing to write.")
+        return
+
+    # Apply filters
+    gdf = _apply_filters(gdf, options.filter_options)
+    if gdf.empty:
+        if options.raise_on_error:
+            raise ExtractError("No features remaining after filtering.")
+        logger.warning("No features remaining after filtering; nothing to write.")
+        return
+
+    # Export
+    if options.flatten:
+        _export_flattened_gpkg(gdf, options, logger)
+    else:
+        _export_partitioned(gdf, options, logger)
 
 
-# Private functions
+# ---- Private helpers ----
 
 
 # Setup / IO helpers
@@ -253,42 +231,16 @@ def _configure_logging(
 ) -> None:
     """
     Configure logging to both file and console.
-
-    Creates/overwrites a log file at ``log_path`` and attaches two handlers to
-    the module logger ``"dxf2geo.extract"``:
-
-    - A file handler capturing verbose output (DEBUG and above) with timestamps.
-    - An optional console (stream) handler for immediate visibility. By default,
-      it emits INFO and above with a concise format. Set ``console_level=None``
-      to disable console output.
-
-    Parameters
-    ----------
-    log_path : Path
-        Path to the log file to write (e.g. ``export.log``).
-    console_level : int | None, optional
-        Logging threshold for console output. Use standard ``logging`` levels
-        (e.g. ``logging.INFO``, ``logging.WARNING``). If ``None``, no console
-        handler is attached.
-
-    Notes
-    -----
-    The logger’s handler list is cleared before configuration so that calling
-    this function multiple times in the same process does not result in
-    duplicate handlers or repeated log messages.
     """
     logger = logging.getLogger("dxf2geo.extract")
-    # Capture everything; handlers decide what to emit.
     logger.setLevel(logging.DEBUG)
     logger.handlers.clear()
 
-    # File handler (verbose, timestamped)
     file_h = logging.FileHandler(log_path, encoding="utf-8")
     file_h.setLevel(logging.DEBUG)
     file_h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
     logger.addHandler(file_h)
 
-    # Optional console handler (concise)
     if console_level is not None:
         console_h = logging.StreamHandler()
         console_h.setLevel(console_level)
@@ -301,428 +253,213 @@ def _configure_logging(
         logger.addHandler(console_h)
 
 
-def _open_source(dxf_path: Path) -> SourceData:
+def _read_dxf(dxf_path: Path, fo: Optional[FilterOptions]) -> gpd.GeoDataFrame:
     """
-    Open a DXF file and retrieve its first layer and spatial reference.
-
-    Parameters
-    ----------
-    dxf_path : Path
-        Path to the input DXF file.
-
-    Returns
-    -------
-    SourceData
-        An object containing the dataset, layer, and spatial reference.
-
-    Raises
-    ------
-    InputOpenError
-        If the DXF file cannot be opened or contains no layers.
+    Read DXF into a GeoDataFrame, applying bbox early when provided.
     """
-    dataset = ogr.Open(str(dxf_path), 0)  # read-only
-    if dataset is None:
-        raise InputOpenError(f"Failed to open DXF dataset: {dxf_path}")
-
-    layer = dataset.GetLayer(0)
-    if layer is None:
-        raise InputOpenError("No layers found in DXF")
-
-    spatial_ref = layer.GetSpatialRef()
-    return SourceData(dataset=dataset, layer=layer, spatial_ref=spatial_ref)
+    kwargs = {"engine": "pyogrio"}
+    if fo and fo.bbox:
+        kwargs["bbox"] = fo.bbox
+    gdf = gpd.read_file(dxf_path, **kwargs)
+    # Ensure a geometry column exists and drop obviously invalid rows
+    if "geometry" not in gdf.columns:
+        gdf = gpd.GeoDataFrame(gdf, geometry=None, crs=None)
+    return gdf
 
 
-def _get_driver(driver_name: str) -> ogr.Driver:
+# Filtering helpers
+def _apply_filters(
+    gdf: gpd.GeoDataFrame, fo: Optional[FilterOptions]
+) -> gpd.GeoDataFrame:
     """
-    Retrieve an OGR driver by name.
-
-    Parameters
-    ----------
-    driver_name : str
-        Name of the desired GDAL/OGR driver (e.g. "GPKG", "ESRI Shapefile").
-
-    Returns
-    -------
-    ogr.Driver
-        The corresponding driver instance.
-
-    Raises
-    ------
-    DriverNotFoundError
-        If no matching driver is found.
+    Apply layer/regex, emptiness, size, bbox (defensive), and field value filters.
     """
-    driver = ogr.GetDriverByName(driver_name)
-    if driver is None:
-        raise DriverNotFoundError(f"OGR driver not found: {driver_name}")
-    return driver
+    if fo is None:
+        return gdf
 
+    out = gdf
 
-def _create_output_dataset(
-    driver: ogr.Driver, output_path: Path, is_shapefile: bool
-) -> ogr.DataSource:
-    """
-    Create a new OGR output data source, overwriting if it already exists.
+    # Layer name filtering (exact, case-insensitive; and regex on raw values)
+    layer_series = out.get("Layer")
+    if layer_series is not None:
+        # Inclusion gate
+        inc_names = set(map(str.lower, fo.include_layers or ()))
+        inc_pats = [re.compile(p, re.I) for p in (fo.include_layer_patterns or ())]
+        if inc_names or inc_pats:
+            mask_name = layer_series.astype(str).str.lower().isin(inc_names)
+            mask_pat = False
+            if inc_pats:
+                # Combine with OR across patterns
+                pat = re.compile("|".join(p.pattern for p in inc_pats), re.I)
+                mask_pat = layer_series.astype(str).str.contains(pat, na=False)
+            out = out[mask_name | mask_pat]
 
-    Parameters
-    ----------
-    driver : ogr.Driver
-        The driver used to create the data source.
-    output_path : Path
-        Target file path for the output.
-    is_shapefile : bool
-        If True, remove sidecar files (e.g. .dbf, .shx) before creation.
+        # Exclusion veto
+        exc_names = set(map(str.lower, fo.exclude_layers or ()))
+        if exc_names:
+            out = out[~layer_series.astype(str).str.lower().isin(exc_names)]
+        if fo.exclude_layer_patterns:
+            pat_exc = re.compile("|".join(fo.exclude_layer_patterns), re.I)
+            out = out[~layer_series.astype(str).str.contains(pat_exc, na=False)]
 
-    Returns
-    -------
-    ogr.DataSource
-        A writable OGR data source.
+    # Drop empties
+    if fo.drop_empty:
+        out = out[~out.geometry.is_empty]
 
-    Raises
-    ------
-    OutputCreateError
-        If the output file cannot be created.
-    """
-    # Emulate ogr2ogr overwrite behaviour
-    if output_path.exists():
-        if is_shapefile:
-            for sidecar in output_path.parent.glob(output_path.stem + ".*"):
-                sidecar.unlink(missing_ok=True)
-        else:
-            output_path.unlink(missing_ok=True)
+    # Zero-size / min thresholds
+    # Note: area() is meaningful for areal geometries; length for linear.
+    if fo.drop_zero_geom or fo.min_area is not None:
+        # For polygons only
+        is_poly = out.geom_type.str.contains("POLYGON", case=False, na=False)
+        if fo.min_area is not None:
+            out = out[~is_poly | (out.geometry.area >= float(fo.min_area))]
+        if fo.drop_zero_geom:
+            out = out[~is_poly | (out.geometry.area > 0.0)]
 
-    output_dataset = driver.CreateDataSource(str(output_path))
-    if output_dataset is None:
-        raise OutputCreateError(f"Failed to create output datasource: {output_path}")
-    return output_dataset
+    if fo.drop_zero_geom or fo.min_length is not None:
+        # For lineal geometries only
+        is_line = out.geom_type.str.contains("LINE", case=False, na=False)
+        if fo.min_length is not None:
+            out = out[~is_line | (out.geometry.length >= float(fo.min_length))]
+        if fo.drop_zero_geom:
+            out = out[~is_line | (out.geometry.length > 0.0)]
 
+    # Defensive bbox post-filter (Pyogrio already applied on read if provided)
+    if fo.bbox:
+        minx, miny, maxx, maxy = fo.bbox
+        # envelope intersects box
+        bounds = out.geometry.bounds  # DataFrame: minx, miny, maxx, maxy
+        mask_bbox = (
+            (bounds["maxx"] >= minx)
+            & (bounds["minx"] <= maxx)
+            & (bounds["maxy"] >= miny)
+            & (bounds["miny"] <= maxy)
+        )
+        out = out[mask_bbox]
 
-def _copy_layer_schema(source_layer: ogr.Layer, output_layer: ogr.Layer) -> None:
-    """
-    Copy the field schema from a source layer to an output layer.
+    # Field value exclusions
+    if fo.exclude_field_values:
+        tmp = out
+        for col, disallowed in fo.exclude_field_values.items():
+            if col in tmp.columns:
+                tmp = tmp[~tmp[col].isin(disallowed)]
+        out = tmp
 
-    Field types, widths, and precisions are preserved. Fails on first error.
-
-    Parameters
-    ----------
-    source_layer : ogr.Layer
-        The input layer to read field definitions from.
-    output_layer : ogr.Layer
-        The target layer to which fields will be added.
-
-    Raises
-    ------
-    OutputCreateError
-        If any field fails to be created on the output layer.
-    """
-    source_definition = source_layer.GetLayerDefn()
-    for i in range(source_definition.GetFieldCount()):
-        field_defn = source_definition.GetFieldDefn(i)
-        new_field = ogr.FieldDefn(field_defn.GetName(), field_defn.GetType())
-        new_field.SetWidth(field_defn.GetWidth())
-        new_field.SetPrecision(field_defn.GetPrecision())
-        if output_layer.CreateField(new_field) != 0:
-            raise OutputCreateError(f"Failed to create field '{field_defn.GetName()}'")
+    return out
 
 
 # Export helpers
-_GEOMETRY_NAME_TO_WKB = {
-    "POINT": ogr.wkbPoint,
-    "MULTIPOINT": ogr.wkbMultiPoint,
-    "LINESTRING": ogr.wkbLineString,
-    "MULTILINESTRING": ogr.wkbMultiLineString,
-    "POLYGON": ogr.wkbPolygon,
-    "MULTIPOLYGON": ogr.wkbMultiPolygon,
-}
+_GEOMS_CANON = ("POINT", "LINESTRING", "POLYGON", "MULTILINESTRING", "MULTIPOLYGON")
 
 
-def _export_flattened(
-    source_layer: ogr.Layer,
-    spatial_ref,
-    options: ExtractOptions,
-    logger: logging.Logger,
+def _export_flattened_gpkg(
+    gdf: gpd.GeoDataFrame, options: ExtractOptions, logger: logging.Logger
 ) -> None:
     """
-    Export all features into a single flattened GeoPackage layer.
-
-    Used when `flatten=True` and the output format is GPKG. All geometries are
-    written to one layer named "all_geometries".
-
-    Parameters
-    ----------
-    source_layer : ogr.Layer
-        The source layer containing features to export.
-    spatial_ref
-        The spatial reference object for the output layer.
-    options : ExtractOptions
-        Extraction settings including filters and paths.
-    logger : logging.Logger
-        Logger instance for output and error reporting.
-
-    Raises
-    ------
-    OutputCreateError
-        If the output layer or file cannot be created.
-    ExtractError
-        If no features are written and `raise_on_error` is set.
+    Export all geometries into a single flattened GeoPackage layer: 'all_geometries'.
     """
-    assert options.driver_name == "GPKG", "flattened output only supported for GPKG"
-    driver = _get_driver(options.driver_name)
-
+    assert options.driver_name == "GPKG", "Flattened output only supported for GPKG."
     output_path = options.output_root / "all_geometries.gpkg"
+    _prepare_output_path(output_path, is_shapefile=False)
     logger.info("Exporting all geometries to %s", output_path)
 
-    output_dataset = _create_output_dataset(driver, output_path, is_shapefile=False)
     try:
-        output_layer = output_dataset.CreateLayer(
-            "all_geometries", srs=spatial_ref, geom_type=ogr.wkbUnknown
+        gdf.to_file(
+            output_path, layer="all_geometries", driver="GPKG", engine="pyogrio"
         )
-        if output_layer is None:
-            raise OutputCreateError("Failed to create output layer 'all_geometries'")
+    except Exception as e:
+        raise OutputCreateError(f"Failed to write flattened GPKG: {e}") from e
 
-        field_index_mapping = _copy_layer_schema_with_mapping(
-            source_layer, output_layer, for_shapefile=False
-        )
-
-        written, skipped = _stream_features(
-            source_layer,
-            output_layer,
-            logger=logger,
-            filter_geometry_name=None,
-            field_index_mapping=field_index_mapping,
-            filter_options=options.filter_options,
-        )
-
-        logger.info("Written: %d, Skipped: %d", written, skipped)
-
-        if options.raise_on_error and written == 0:
-            raise ExtractError("No features written for 'all geometries'")
-    finally:
-        output_dataset = None  # flush
+    if options.raise_on_error and len(gdf) == 0:
+        raise ExtractError("No features written for 'all_geometries'.")
 
 
 def _export_partitioned(
-    source_layer: ogr.Layer,
-    spatial_ref,
-    options: ExtractOptions,
-    logger: logging.Logger,
+    gdf: gpd.GeoDataFrame, options: ExtractOptions, logger: logging.Logger
 ) -> None:
     """
     Export features into separate layers or files by geometry type.
-
-    Each geometry type (e.g. "POINT", "LINESTRING") is written to a separate
-    Shapefile or GeoPackage, depending on `options.driver_name`.
-
-    Parameters
-    ----------
-    source_layer : ogr.Layer
-        The input DXF layer.
-    spatial_ref
-        The spatial reference object for all outputs.
-    options : ExtractOptions
-        Settings controlling geometry types, filters, and output format.
-    logger : logging.Logger
-        Logger instance for messages and warnings.
-
-    Raises
-    ------
-    OutputCreateError
-        If any output layer fails to be created.
-    ExtractError
-        If no features are written for any geometry and `raise_on_error` is set.
     """
-    driver = _get_driver(options.driver_name)
     is_shapefile = options.driver_name == "ESRI Shapefile"
 
+    # Normalise requested geometry names
+    requested = tuple(n.upper() for n in options.geometry_types)
+    # Keep order and only those we know how to detect
+    requested = tuple(n for n in requested if n in _GEOMS_CANON)
+
     for geometry_name in tqdm(
-        options.geometry_types,
+        requested,
         desc="Iterating over geometries",
         dynamic_ncols=True,
         leave=True,
         mininterval=0.2,
     ):
-        geometry_wkb = _GEOMETRY_NAME_TO_WKB.get(geometry_name.upper(), ogr.wkbUnknown)
+        part = _filter_by_geom_name(gdf, geometry_name)
+        if part.empty:
+            continue
 
         if is_shapefile:
-            output_dir = options.output_root / geometry_name.lower()
-            output_dir.mkdir(parents=True, exist_ok=True)
-            output_path = output_dir / f"{geometry_name.lower()}.shp"
-            output_layer_name = geometry_name.lower()
+            # One folder per type, one shapefile per folder
+            out_dir = options.output_root / geometry_name.lower()
+            out_dir.mkdir(parents=True, exist_ok=True)
+            output_path = out_dir / f"{geometry_name.lower()}.shp"
+            layer_kw = dict()
+            # Shapefile field-name constraints
+            part_to_write = _apply_shapefile_field_rules(part)
         else:
+            # One GPKG file per type, layer name is the type
             output_path = options.output_root / f"{geometry_name.lower()}.gpkg"
-            output_layer_name = geometry_name.lower()
+            layer_kw = dict(layer=geometry_name.lower())
+            part_to_write = part
 
-        # logger.info("Exporting %s", geometry_name)
-
-        output_dataset = _create_output_dataset(
-            driver, output_path, is_shapefile=is_shapefile
-        )
+        _prepare_output_path(output_path, is_shapefile=is_shapefile)
         try:
-            output_layer = output_dataset.CreateLayer(
-                output_layer_name, srs=spatial_ref, geom_type=geometry_wkb
+            part_to_write.to_file(
+                output_path,
+                driver=("ESRI Shapefile" if is_shapefile else "GPKG"),
+                engine="pyogrio",
+                **layer_kw,
             )
-            if output_layer is None:
-                raise OutputCreateError(
-                    f"Failed to create output layer '{output_layer_name}'"
-                )
+        except Exception as e:
+            raise OutputCreateError(f"Failed to write '{geometry_name}': {e}") from e
 
-            field_index_mapping = _copy_layer_schema_with_mapping(
-                source_layer,
-                output_layer,
-                for_shapefile=is_shapefile,
-            )
-
-            written, skipped = _stream_features(
-                source_layer,
-                output_layer,
-                logger=logger,
-                filter_geometry_name=geometry_name.upper(),
-                field_index_mapping=field_index_mapping,
-                filter_options=options.filter_options,
-            )
-
-            # logger.info(
-            #     "Written %s: %d, Skipped: %d", geometry_name, written, skipped
-            # )
-
-            if options.raise_on_error and written == 0:
-                raise ExtractError(f"No features written for '{geometry_name}'")
-        finally:
-            output_dataset = None  # flush
+        if options.raise_on_error and part_to_write.empty:
+            raise ExtractError(f"No features written for '{geometry_name}'.")
 
 
-# Data streaming
-def _stream_features(
-    source_layer: ogr.Layer,
-    output_layer: ogr.Layer,
-    *,
-    logger: logging.Logger,
-    filter_geometry_name: Optional[str],
-    field_index_mapping: list[Optional[int]],
-    filter_options: Optional[FilterOptions] = None,
-) -> tuple[int, int]:
+def _filter_by_geom_name(gdf: gpd.GeoDataFrame, target: str) -> gpd.GeoDataFrame:
     """
-    Stream features from the source layer to the output layer with optional filtering.
-
-    Copies each feature's geometry and selected fields. Skips features that do
-    not match the specified geometry type or filter criteria.
-
-    Parameters
-    ----------
-    source_layer : ogr.Layer
-        Layer to read features from.
-    output_layer : ogr.Layer
-        Layer to write accepted features to.
-    logger : logging.Logger
-        Logger for warning messages when features are skipped.
-    filter_geometry_name : str, optional
-        Geometry type name to filter on (e.g. "POLYGON"), or None to accept all.
-    field_index_mapping : list of Optional[int]
-        Mapping from source field indices to output field indices.
-    filter_options : FilterOptions, optional
-        Additional per-feature filters.
-
-    Returns
-    -------
-    tuple[int, int]
-        A tuple (written, skipped) indicating the number of features processed.
+    Return subset of gdf whose geometry type matches target (case-insensitive).
     """
-    written = 0
-    skipped = 0
-
-    source_def = source_layer.GetLayerDefn()
-    source_layer.ResetReading()
-
-    for source_feature in source_layer:
-        geometry = source_feature.GetGeometryRef()
-        if filter_geometry_name and not _geometry_name_equals(
-            geometry, filter_geometry_name
-        ):
-            continue
-        if not _feature_allowed(source_feature, filter_options):
-            continue
-
-        output_feature = ogr.Feature(output_layer.GetLayerDefn())
-        try:
-            # Copy attributes using index mapping
-            for i in range(source_def.GetFieldCount()):
-                dest_idx = field_index_mapping[i]
-                if dest_idx is None:
-                    continue
-                output_feature.SetField(dest_idx, source_feature.GetField(i))
-
-            if geometry is not None:
-                output_feature.SetGeometry(geometry.Clone())
-
-            output_layer.CreateFeature(output_feature)
-            written += 1
-        except Exception as feature_error:
-            skipped += 1
-            logger.warning("Skipping a feature: %s", feature_error)
-        finally:
-            output_feature = None  # release handle
-
-    return written, skipped
+    # GeoPandas/Shapely report geometry types like 'LineString', 'MultiPolygon'
+    mask = gdf.geom_type.str.upper() == target.upper()
+    return gdf[mask]
 
 
-def _geometry_name_equals(geometry: Optional[ogr.Geometry], target_name: str) -> bool:
+def _prepare_output_path(output_path: Path, *, is_shapefile: bool) -> None:
     """
-    Check whether a geometry matches the target geometry name.
-
-    Comparison is case-insensitive.
-
-    Parameters
-    ----------
-    geometry : ogr.Geometry or None
-        Geometry to test.
-    target_name : str
-        Expected geometry name.
-
-    Returns
-    -------
-    bool
-        True if names match, False otherwise.
+    Remove existing outputs to emulate ogr2ogr overwrite semantics.
     """
-    return bool(geometry) and geometry.GetGeometryName().upper() == target_name.upper()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists():
+        if is_shapefile:
+            stem = output_path.stem
+            for sidecar in output_path.parent.glob(stem + ".*"):
+                sidecar.unlink(missing_ok=True)
+        else:
+            output_path.unlink(missing_ok=True)
 
 
+# Field/Schema helpers for Shapefile
 def _normalise_field_name(name: str) -> str:
-    """
-    Sanitise a field name for use in output formats.
-
-    Replaces non-alphanumeric characters with underscores to improve
-    compatibility across GIS formats.
-
-    Parameters
-    ----------
-    name : str
-        Raw field name.
-
-    Returns
-    -------
-    str
-        Sanitised field name.
-    """
-    # Alphanumeric + underscore, no spaces, conservative for cross-compat
-    norm = re.sub(r"[^A-Za-z0-9_]", "_", name)
-    return norm
+    """Alphanumeric/underscore only; conservative for cross-compat."""
+    return re.sub(r"[^A-Za-z0-9_]", "_", name)
 
 
 def _make_shapefile_field_names(source_names: list[str]) -> list[str]:
     """
     Create valid, unique field names for Shapefiles from source field names.
-
-    Ensures all names are uppercase, ≤10 characters, and conflict-free.
-    Appends numeric suffixes if required to maintain uniqueness.
-
-    Parameters
-    ----------
-    source_names : list of str
-        Original field names from the source layer.
-
-    Returns
-    -------
-    list of str
-        Sanitised and truncated field names suitable for Shapefiles.
+    Ensures names are uppercase, ≤10 characters, and unique.
     """
     used = set()
     result: list[str] = []
@@ -740,331 +477,14 @@ def _make_shapefile_field_names(source_names: list[str]) -> list[str]:
     return result
 
 
-def _copy_layer_schema_with_mapping(
-    source_layer: ogr.Layer,
-    output_layer: ogr.Layer,
-    *,
-    for_shapefile: bool,
-) -> list[Optional[int]]:
+def _apply_shapefile_field_rules(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """
-    Copy the field schema from a source layer to an output layer.
-
-    Produces a mapping from source field indices to destination indices,
-    accounting for field name constraints. Shapefiles are restricted to
-    10-character uppercase field names and must be made unique.
-
-    Parameters
-    ----------
-    source_layer : ogr.Layer
-        The input layer from which to read field definitions.
-    output_layer : ogr.Layer
-        The output layer to receive new fields.
-    for_shapefile : bool
-        If True, enforce Shapefile naming rules.
-
-    Returns
-    -------
-    list of Optional[int]
-        A mapping from source field index to output field index, or None if
-        the field could not be created.
-
-    Raises
-    ------
-    OutputCreateError
-        If any output field fails to be created.
+    Return a copy of gdf with columns renamed to satisfy Shapefile constraints.
+    Geometry column is preserved.
     """
-    source_def = source_layer.GetLayerDefn()
-    source_names = [
-        source_def.GetFieldDefn(i).GetName() for i in range(source_def.GetFieldCount())
-    ]
-
-    if for_shapefile:
-        dest_names = _make_shapefile_field_names(source_names)
-    else:
-        # Other drivers usually preserve names
-        dest_names = source_names
-
-    # Create fields on the output layer
-    for i, src_name in enumerate(source_names):
-        src_fdef = source_def.GetFieldDefn(i)
-        dest_name = dest_names[i]
-        new_fdef = ogr.FieldDefn(dest_name, src_fdef.GetType())
-        new_fdef.SetWidth(src_fdef.GetWidth())
-        new_fdef.SetPrecision(src_fdef.GetPrecision())
-        if output_layer.CreateField(new_fdef) != 0:
-            raise OutputCreateError(f"Failed to create field '{dest_name}'")
-
-    # Build destination name->index after creation (driver may still adjust case)
-    dest_def = output_layer.GetLayerDefn()
-    dest_index_by_name = {
-        dest_def.GetFieldDefn(j).GetName(): j for j in range(dest_def.GetFieldCount())
-    }
-
-    # Map source index -> destination index by our chosen dest_names (robust)
-    mapping: list[Optional[int]] = []
-    for dest_name in dest_names:
-        mapping.append(dest_index_by_name.get(dest_name))
-    return mapping
-
-
-# Filtering helpers (top-level; no inner functions)
-def _norm_layer(name: Optional[str]) -> str:
-    """
-    Normalise a layer name to lowercase with surrounding whitespace removed.
-
-    Parameters
-    ----------
-    name : str or None
-        Original layer name.
-
-    Returns
-    -------
-    str
-        Normalised layer name, or empty string if None.
-    """
-    return (name or "").strip().lower()
-
-
-def _layer_allowed(layer_name: Optional[str], opts: Optional[FilterOptions]) -> bool:
-    """
-    Determine whether a layer name passes include/exclude filters.
-
-    Parameters
-    ----------
-    layer_name : str or None
-        The source layer name. ``None`` is treated as an empty string.
-    opts : FilterOptions or None
-        Active filter configuration. If ``None``, the layer is allowed.
-
-    Returns
-    -------
-    bool
-        ``True`` if the layer passes the filters, ``False`` otherwise.
-
-    Notes
-    -----
-    Behaviour follows two rules:
-
-    1. **Inclusion gate (optional)**: if any includes (exact names or regular
-       expressions) are provided, the layer must match at least one.
-    2. **Exclusion veto (always)**: any exclude (exact name or regular
-       expression) match rejects the layer, even if it was included.
-
-    Exact-name checks are performed against a normalised lower-case copy of the
-    name. Regular expressions are applied to the original name with
-    ``re.IGNORECASE``.
-
-    Examples
-    --------
-    >>> opts = FilterOptions(
-    ...     include_layer_patterns=(r"^road_",),
-    ...     exclude_layer_patterns=(r"_tmp$",),
-    ... )
-    >>> _layer_allowed("road_primary", opts)
-    True
-    >>> _layer_allowed("road_primary_tmp", opts)
-    False
-    """
-    if not opts:
-        return True
-
-    ln = (layer_name or "").strip().lower()
-
-    inc_names = set(map(str.lower, opts.include_layers or ()))
-    exc_names = set(map(str.lower, opts.exclude_layers or ()))
-
-    inc_pats = [re.compile(p, re.I) for p in (opts.include_layer_patterns or ())]
-    exc_pats = [re.compile(p, re.I) for p in (opts.exclude_layer_patterns or ())]
-
-    if inc_names or inc_pats:
-        if ln not in inc_names and not any(
-            p.search(layer_name or "") for p in inc_pats
-        ):
-            return False
-
-    if ln in exc_names:
-        return False
-    if any(p.search(layer_name or "") for p in exc_pats):
-        return False
-
-    return True
-
-
-def _geom_allowed(g: Optional[ogr.Geometry], opts: Optional[FilterOptions]) -> bool:
-    """
-    Determine whether a geometry passes spatial and structural filters.
-
-    Evaluates emptiness, area, length, and bounding box constraints. Rules vary
-    depending on geometry type.
-
-    Parameters
-    ----------
-    g : ogr.Geometry or None
-        Geometry to test.
-    opts : FilterOptions or None
-        Filtering criteria.
-
-    Returns
-    -------
-    bool
-        True if the geometry satisfies all filter conditions.
-    """
-    if not opts:
-        return True
-    if not g:
-        return not opts.drop_empty
-    if opts.drop_empty and g.IsEmpty():
-        return False
-
-    name = (g.GetGeometryName() or "").upper()
-
-    if "POLYGON" in name:
-        area = g.GetArea()
-        if opts.min_area is not None and area < opts.min_area:
-            return False
-        if opts.drop_zero_geom and opts.min_area is None and area == 0.0:
-            return False
-
-    if "LINE" in name:
-        length = g.Length()
-        if opts.min_length is not None and length < opts.min_length:
-            return False
-        if opts.drop_zero_geom and opts.min_length is None and length == 0.0:
-            return False
-
-    if opts.bbox:
-        minx, miny, maxx, maxy = opts.bbox
-        gxmin, gxmax, gymin, gymax = g.GetEnvelope()  # (minx, maxx, miny, maxy)
-        if gxmax < minx or gxmin > maxx or gymax < miny or gymin > maxy:
-            return False
-
-    return True
-
-
-def _fields_allowed(feat: ogr.Feature, opts: Optional[FilterOptions]) -> bool:
-    """
-    Determine whether a feature passes field value filters.
-
-    Excludes features based on specific disallowed values in named fields.
-
-    Parameters
-    ----------
-    feat : ogr.Feature
-        Feature to test.
-    opts : FilterOptions or None
-        Filtering rules for attribute values.
-
-    Returns
-    -------
-    bool
-        True if the feature passes all field-based filters.
-    """
-    if not opts or not opts.exclude_field_values:
-        return True
-    for fld, disallowed in opts.exclude_field_values.items():
-        try:
-            val = feat.GetField(fld)
-        except Exception:
-            continue
-        if val in disallowed:
-            return False
-    return True
-
-
-def _feature_allowed(feat: ogr.Feature, opts: Optional[FilterOptions]) -> bool:
-    """
-    Check whether a feature should be included based on all filters.
-
-    Applies layer name, field value, and geometry-based filtering in sequence.
-
-    Parameters
-    ----------
-    feat : ogr.Feature
-        Feature to evaluate.
-    opts : FilterOptions or None
-        Filtering options.
-
-    Returns
-    -------
-    bool
-        True if the feature meets all inclusion criteria.
-    """
-    if not opts:
-        return True
-    try:
-        layer_name = feat.GetField("Layer")
-    except Exception:
-        layer_name = None
-    if not _layer_allowed(layer_name, opts):
-        return False
-    if not _fields_allowed(feat, opts):
-        return False
-    return _geom_allowed(feat.GetGeometryRef(), opts)
-
-
-def _gdal_handler(err_class, err_no, msg, *, logger, suppress_contains):
-    """
-    Custom GDAL error handler that redirects GDAL messages to the logger.
-
-    Handles debug, warning, and error messages from GDAL. Suppresses selected
-    warnings based on substring matching.
-
-    Parameters
-    ----------
-    err_class : int
-        GDAL error class constant (e.g. CE_Warning, CE_Failure).
-    err_no : int
-        GDAL error number constant (e.g. CPLE_OpenFailed).
-    msg : str
-        Error message text.
-    logger : logging.Logger
-        Logger instance to receive the output.
-    suppress_contains : Iterable[str]
-        Substrings used to suppress specific warning messages.
-    """
-    # err_class: CE_*
-    # err_no:    CPLE_*
-    if err_class == gdal.CE_Debug:
-        logger.debug("GDAL: %s", msg)
-        return
-
-    if err_class == gdal.CE_Warning:
-        if any(s in msg for s in suppress_contains):
-            logger.debug("Suppressed GDAL warning: %s", msg)
-        else:
-            logger.warning("GDAL warning: %s", msg)
-        return
-
-    if err_class in (gdal.CE_Failure, gdal.CE_Fatal):
-        # UseExceptions() will raise; still log context
-        logger.error("GDAL error (%s): %s", err_no, msg)
-        return
-
-    # Fallback for CE_None or anything unexpected
-    logger.info("GDAL: %s", msg)
-
-
-@contextmanager
-def gdal_log_to_logger(logger, suppress_contains=("Block ", "DXF: Skipping")):
-    """
-    Context manager that redirects GDAL errors to a Python logger.
-
-    Installs a temporary GDAL error handler that logs messages and selectively
-    suppresses known noisy warnings.
-
-    Parameters
-    ----------
-    logger : logging.Logger
-        Logger to capture GDAL messages.
-    suppress_contains : tuple of str, optional
-        Substrings of warning messages to suppress. Default includes common
-        DXF and block-related messages.
-    """
-    handler = partial(
-        _gdal_handler, logger=logger, suppress_contains=tuple(suppress_contains)
-    )
-    gdal.PushErrorHandler(handler)
-    try:
-        yield
-    finally:
-        gdal.PopErrorHandler()
+    cols = [c for c in gdf.columns if c != gdf.geometry.name]
+    new_cols = _make_shapefile_field_names(cols)
+    rename_map = dict(zip(cols, new_cols))
+    if not rename_map:
+        return gdf
+    return gdf.rename(columns=rename_map, copy=True)
