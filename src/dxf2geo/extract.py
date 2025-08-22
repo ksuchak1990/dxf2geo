@@ -12,11 +12,11 @@ field sanitisation, and logging are implemented to support robust automated use.
 
 from __future__ import annotations
 
-import logging
-import re
 from collections.abc import Iterable
 from dataclasses import dataclass
+import logging
 from pathlib import Path
+import re
 
 import geopandas as gpd
 from tqdm.auto import tqdm
