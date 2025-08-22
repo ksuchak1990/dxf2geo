@@ -1,59 +1,50 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "dxf2geo"
-version = "0.1.2"
-description = "Convert DXF CAD files to GIS formats like Shapefile and GeoPackage, with interactive visualisation."
-authors = [
-    { name = "Keiran Suchak", email = "ksuchak1990@yahoo.co.uk" }
-]
+version = "0.1.0"
+description = "Convert CAD DXF data into geospatial formats and visualisations using GeoPandas/Pyogrio."
 readme = "README.md"
-requires-python = ">=3.8"
-
-dependencies = [
-    "tqdm",
-    "gdal",
-    "geopandas",
-    "shapely",
-    "plotly",
-    "pandas",
-    "fiona"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Keiran Suchak" }]
+keywords = ["GDAL", "DXF", "geospatial", "GIS", "vector", "conversion"]
+classifiers = [
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Topic :: Scientific/Engineering :: GIS",
 ]
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.hatch.envs.default]
 dependencies = [
-    "pytest",
-    "ruff",
-    "black",
-    "pytest-mock"
+  "geopandas>=1.0",
+  "pyogrio>=0.11",
+  "shapely>=2.0",
+  "pandas>=2.0",
+  "plotly>=5",
+  "tqdm>=4.66",
 ]
 
-[tool.hatch.envs.default.scripts]
-test = "pytest"
-lint = "ruff check src/ tests/"
-format = "ruff format src/ tests/"
-check-format = "ruff format --check src/ tests/"
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "pytest-mock",
+  "ruff",
+  "black",
+  "build",
+  "twine",
+]
 
-[tool.hatch.metadata]
-allow-direct-references = true
+[project.urls]
+Homepage = "https://github.com/ksuchak1990/dxf2geo"
+Repository = "https://github.com/ksuchak1990/dxf2geo"
+Issues = "https://github.com/ksuchak1990/dxf2geo/issues"
 
-[tool.ruff]
-line-length = 88
-target-version = "py38"
-fix = true
-show-fixes = true
-exclude = ["__pycache__", ".venv"]
-
-[tool.black]
-line-length = 88
-target-version = ["py38"]
-exclude = '''
-/(
-    \.venv
-  | \.git
-  | \.mypy_cache
-  | __pycache__
-)/
-'''
+[tool.setuptools.packages.find]
+where = ["src"]
