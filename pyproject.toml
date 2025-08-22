@@ -55,4 +55,7 @@ line-length = 88
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
-ignore = []
+
+[tool.ruff.lint.isort]
+known-first-party = ["dxf2geo"]
+force-sort-within-sections = true
