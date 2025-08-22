@@ -70,24 +70,23 @@ This creates a set of shapefiles for of the types of geometry in a new `output/`
 directory.
 
 ```python
+# Imports
 from dxf2geo.extract import extract_geometries
 from dxf2geo.visualise import (
     load_geometries,
-    filter_modelspace_lines,
-    remove_short_axis_aligned_lines,
     plot_geometries,
 )
 from pathlib import Path
 
-input_dxf = Path("~/Downloads/example.dxf").expanduser()
+# Define paths
+input_dxf = Path("./example.dxf").expanduser()
 output_dir = Path("output")
 
+# Process CAD file
 extract_geometries(input_dxf, output_dir)
 
+# Produce `plotly` html figure
 gdf = load_geometries(output_dir)
-gdf = filter_modelspace_lines(gdf)
-gdf = remove_short_axis_aligned_lines(gdf)
-
 plot_geometries(gdf, output_dir / "geometry_preview.html")
 ```
 
