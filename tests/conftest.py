@@ -1,99 +1,64 @@
 from __future__ import annotations
 
-import os
+from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Callable, Iterable, Tuple
 
 import pytest
 
+try:
+    from osgeo import ogr  # type: ignore
+except ImportError:
+    ogr = None
 
-# Skip conditions
-def _have_gdal_dxf() -> bool:
+try:
+    import ezdxf  # type: ignore
+except ImportError:
+    ezdxf = None
+
+
+def have_gdal_dxf_driver() -> bool:
+    if ogr is None:
+        return False
+    return ogr.GetDriverByName("DXF") is not None
+
+
+def gdal_can_write_dxf() -> bool:
+    if not have_gdal_dxf_driver():
+        return False
+    drv = ogr.GetDriverByName("DXF")
     try:
-        from osgeo import ogr  # type: ignore
+        return bool(drv.TestCapability("CreateDataSource"))
     except Exception:
         return False
-    return bool(ogr.GetDriverByName("DXF"))
 
 
 have_gdal_dxf = pytest.mark.skipif(
-    not _have_gdal_dxf(), reason="GDAL not available or DXF driver missing"
+    not have_gdal_dxf_driver(), reason="GDAL not available or DXF driver missing"
 )
 
 
-# Import shims to tolerate minor module layout churn
-def import_api():
-    """
-    Try a few plausible locations for the public API mentioned in the README.
-    Adjust here if your internal layout differs.
-    """
-    # extract_geometries + FilterOptions
-    Extract = None
-    Filt = None
-    try:
-        from dxf2geo.extract import \
-            extract_geometries as Extract  # type: ignore
-    except Exception:
-        pass
-    if Extract is None:
-        from dxf2geo import extract  # type: ignore
-
-        Extract = extract.extract_geometries  # type: ignore[attr-defined]
-
-    # FilterOptions may be exported in several places
-    try:
-        from dxf2geo.extract import FilterOptions as Filt  # type: ignore
-    except Exception:
-        try:
-            from dxf2geo.filters import FilterOptions as Filt  # type: ignore
-        except Exception:
-            from dxf2geo import FilterOptions as Filt  # type: ignore
-
-    # visualise
-    try:
-        from dxf2geo.visualise import (load_geometries,  # type: ignore
-                                       plot_geometries)
-    except Exception:  # pragma: no cover - we only reach this if names moved
-        load_geometries = None
-        plot_geometries = None
-
-    return Extract, Filt, load_geometries, plot_geometries
-
-
-# Helper to generate tiny DXF files with OGR
-
-
 def _create_layer(ds, name: str, geom_type):
-    lyr = ds.CreateLayer(name, srs=None, geom_type=geom_type)
-    return lyr
+    return ds.CreateLayer(name, srs=None, geom_type=geom_type)
 
 
 def _add_point(lyr, x: float, y: float):
-    from osgeo import ogr  # type: ignore
-
     g = ogr.Geometry(ogr.wkbPoint)
     g.AddPoint(float(x), float(y))
     feat = ogr.Feature(lyr.GetLayerDefn())
     feat.SetGeometry(g)
     lyr.CreateFeature(feat)
-    feat = None
 
 
-def _add_linestring(lyr, coords: Iterable[Tuple[float, float]]):
-    from osgeo import ogr  # type: ignore
-
+def _add_linestring(lyr, coords: Iterable[tuple[float, float]]):
     g = ogr.Geometry(ogr.wkbLineString)
     for x, y in coords:
         g.AddPoint(float(x), float(y))
     feat = ogr.Feature(lyr.GetLayerDefn())
     feat.SetGeometry(g)
     lyr.CreateFeature(feat)
-    feat = None
 
 
-def _add_polygon(lyr, ring_coords: Iterable[Tuple[float, float]]):
-    from osgeo import ogr  # type: ignore
-
+def _add_polygon(lyr, ring_coords: Iterable[tuple[float, float]]):
     ring = ogr.Geometry(ogr.wkbLinearRing)
     for x, y in ring_coords:
         ring.AddPoint(float(x), float(y))
@@ -102,65 +67,128 @@ def _add_polygon(lyr, ring_coords: Iterable[Tuple[float, float]]):
     feat = ogr.Feature(lyr.GetLayerDefn())
     feat.SetGeometry(poly)
     lyr.CreateFeature(feat)
-    feat = None
+
+
+def write_dxf_with_gdal(
+    dxf_path: Path,
+    *,
+    add_zero_length_line: bool = False,
+    add_far_feature: bool = False,
+    small_poly: bool = False,
+) -> None:
+    drv = ogr.GetDriverByName("DXF")
+    ds = drv.CreateDataSource(str(dxf_path))
+    if ds is None:
+        raise RuntimeError("GDAL DXF driver returned None from CreateDataSource")
+
+    lyr_roads = _create_layer(ds, "roads", ogr.wkbLineString)
+    lyr_build = _create_layer(ds, "buildings", ogr.wkbPolygon)
+    lyr_tmp = _create_layer(ds, "tmp", ogr.wkbLineString)
+    lyr_points = _create_layer(ds, "survey_points", ogr.wkbPoint)
+    if not all([lyr_roads, lyr_build, lyr_tmp, lyr_points]):
+        ds = None  # close before bailing
+        raise RuntimeError("GDAL DXF driver failed to create one or more layers")
+
+    _add_linestring(lyr_roads, [(0, 0), (100, 0)])
+    _add_linestring(lyr_roads, [(0, 0), (100, 100)])
+    if add_zero_length_line:
+        _add_linestring(lyr_roads, [(5, 5), (5, 5)])
+    if add_far_feature:
+        _add_linestring(lyr_roads, [(10000, 10000), (10100, 10100)])
+
+    _add_linestring(lyr_tmp, [(0, 0), (1, 0)])
+
+    if small_poly:
+        _add_polygon(lyr_build, [(0, 0), (2, 0), (2, 2), (0, 2), (0, 0)])
+    _add_polygon(lyr_build, [(10, 10), (15, 10), (15, 15), (10, 15), (10, 10)])
+
+    _add_point(lyr_points, 0, 0)
+    ds = None  # flush/close
+
+
+def write_dxf_with_ezdxf(
+    dxf_path: Path,
+    *,
+    add_zero_length_line=False,
+    add_far_feature=False,
+    small_poly=False,
+) -> None:
+    doc = ezdxf.new(setup=True)
+    msp = doc.modelspace()
+
+    for name in ("roads", "buildings", "tmp", "survey_points"):
+        if name not in doc.layers:
+            doc.layers.add(name)
+
+    msp.add_lwpolyline([(0, 0), (100, 0)], dxfattribs={"layer": "roads"})
+    msp.add_lwpolyline([(0, 0), (100, 100)], dxfattribs={"layer": "roads"})
+    if add_zero_length_line:
+        msp.add_lwpolyline([(5, 5), (5, 5)], dxfattribs={"layer": "roads"})
+    if add_far_feature:
+        msp.add_lwpolyline(
+            [(10000, 10000), (10100, 10100)], dxfattribs={"layer": "roads"}
+        )
+
+    msp.add_lwpolyline([(0, 0), (1, 0)], dxfattribs={"layer": "tmp"})
+
+    if small_poly:
+        msp.add_lwpolyline(
+            [(0, 0), (2, 0), (2, 2), (0, 2), (0, 0)],
+            close=True,
+            dxfattribs={"layer": "buildings"},
+        )
+    msp.add_lwpolyline(
+        [(10, 10), (15, 10), (15, 15), (10, 15), (10, 10)],
+        close=True,
+        dxfattribs={"layer": "buildings"},
+    )
+
+    msp.add_point((0, 0), dxfattribs={"layer": "survey_points"})
+    doc.saveas(str(dxf_path))
 
 
 @pytest.fixture(scope="session")
 def make_dxf(tmp_path_factory) -> Callable[..., Path]:
-    """
-    Factory fixture that creates a minimal DXF with optional extras.
-
-    Parameters (all optional, see defaults below):
-      - add_zero_length_line: bool
-      - add_far_feature: bool
-      - small_poly: bool
-    """
-
     def _factory(
-        *,
-        add_zero_length_line: bool = False,
-        add_far_feature: bool = False,
-        small_poly: bool = False,
+        *, add_zero_length_line=False, add_far_feature=False, small_poly=False
     ) -> Path:
-        from osgeo import ogr  # type: ignore
-
         d = tmp_path_factory.mktemp("dxfdata")
         dxf_path = d / "input.dxf"
-        drv = ogr.GetDriverByName("DXF")
-        ds = drv.CreateDataSource(str(dxf_path))  # type: ignore[arg-type]
 
-        # Layers: roads (lines/points), buildings (polygons), tmp (short lines)
-        lyr_roads = _create_layer(ds, "roads", ogr.wkbLineString)
-        lyr_build = _create_layer(ds, "buildings", ogr.wkbPolygon)
-        lyr_tmp = _create_layer(ds, "tmp", ogr.wkbLineString)
-        lyr_points = _create_layer(ds, "survey_points", ogr.wkbPoint)
+        tried_gdal = False
+        if gdal_can_write_dxf():
+            tried_gdal = True
+            try:
+                write_dxf_with_gdal(
+                    dxf_path,
+                    add_zero_length_line=add_zero_length_line,
+                    add_far_feature=add_far_feature,
+                    small_poly=small_poly,
+                )
+                return dxf_path
+            except Exception:
+                # Clean up partial file so ezdxf can safely overwrite
+                try:
+                    # Python 3.8+: wrap in try/except if needed
+                    dxf_path.unlink(missing_ok=True)
+                except Exception:
+                    pass  # best effort; ezdxf will overwrite anyway
 
-        # Roads: one long horizontal line and one diagonal
-        _add_linestring(lyr_roads, [(0, 0), (100, 0)])
-        _add_linestring(lyr_roads, [(0, 0), (100, 100)])
-        if add_zero_length_line:
-            _add_linestring(lyr_roads, [(5, 5), (5, 5)])
+        if ezdxf is not None:
+            write_dxf_with_ezdxf(
+                dxf_path,
+                add_zero_length_line=add_zero_length_line,
+                add_far_feature=add_far_feature,
+                small_poly=small_poly,
+            )
+            return dxf_path
 
-        if add_far_feature:
-            _add_linestring(lyr_roads, [(10000, 10000), (10100, 10100)])
-
-        # Tmp: short axis-aligned line
-        _add_linestring(lyr_tmp, [(0, 0), (1, 0)])
-
-        # Buildings: either one big or one small + one big
-        if small_poly:
-            _add_polygon(lyr_build, [(0, 0), (2, 0),
-                         (2, 2), (0, 2), (0, 0)])  # area 4
-        _add_polygon(
-            lyr_build, [(10, 10), (15, 10), (15, 15), (10, 15), (10, 10)]
-        )  # area 25
-
-        # A point to exercise POINT handling
-        _add_point(lyr_points, 0, 0)
-
-        # Flush & close
-        ds = None  # type: ignore[assignment]
-        return dxf_path
+        reason = (
+            "GDAL DXF is unusable (read-only or broken) and ezdxf not installed"
+            if tried_gdal
+            else "GDAL not available and ezdxf not installed"
+        )
+        pytest.skip(f"Cannot create DXF: {reason}")
 
     return _factory
 
@@ -168,6 +196,31 @@ def make_dxf(tmp_path_factory) -> Callable[..., Path]:
 @pytest.fixture
 def output_dir(tmp_path) -> Path:
     return tmp_path / "output"
+
+
+def import_api():
+    try:
+        from dxf2geo.extract import extract_geometries  # type: ignore
+    except Exception:
+        from dxf2geo import extract as _extract  # type: ignore
+
+        extract_geometries = _extract.extract_geometries
+
+    try:
+        from dxf2geo.extract import FilterOptions  # type: ignore
+    except Exception:
+        try:
+            from dxf2geo.filters import FilterOptions  # type: ignore
+        except Exception:
+            from dxf2geo import FilterOptions  # type: ignore
+
+    try:
+        from dxf2geo.visualise import load_geometries, plot_geometries  # type: ignore
+    except Exception:
+        load_geometries = None
+        plot_geometries = None
+
+    return extract_geometries, FilterOptions, load_geometries, plot_geometries
 
 
 @pytest.fixture(scope="session")
