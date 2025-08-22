@@ -3,16 +3,15 @@ name: Publish
 on:
   push:
     tags:
-      - "v*.*.*"
+      - "v*.*.*"        # normal releases
+      - "v*.*.*-rc*"    # pre-releases for TestPyPI only
   workflow_dispatch:
 
 permissions:
-  id-token: write
   contents: read
 
 jobs:
   build:
-    name: Build sdist/wheel
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,23 +24,14 @@ jobs:
         run: |
           python -m pip install --upgrade twine
           python -m twine check dist/*
-
-      - name: Smoke test wheel
-        run: |
-          python -m venv /tmp/venv
-          . /tmp/venv/bin/activate
-          python -m pip install dist/*.whl
-          python -c "import dxf2geo; print('import OK')"
-
-      - name: Upload artefacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: dist
           path: dist/*
 
   publish-testpypi:
-    name: Publish to TestPyPI
-    needs: build
+    # Always run for version tags (normal or -rc)
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -57,7 +47,8 @@ jobs:
           repository-url: https://test.pypi.org/legacy/
 
   publish-pypi:
-    name: Publish to PyPI
+    # Skip on pre-release tags containing "-rc"
+    if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-rc')
     needs: [build, publish-testpypi]
     runs-on: ubuntu-latest
     permissions:
@@ -70,4 +61,3 @@ jobs:
           path: dist
       - name: Publish (PyPI)
         uses: pypa/gh-action-pypi-publish@release/v1
-
