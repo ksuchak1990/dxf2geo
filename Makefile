@@ -1,7 +1,18 @@
-clean-code:
-	ruff check --select I --fix
-	ruff format
-	ruff check --fix
+.DEFAULT_GOAL := pre-commit
+
+.PHONY: pre-commit fix lint check test docs
+
+pre-commit: fix
+
+fix:
+	ruff check --fix .
+	ruff format .
+
+lint:
+	ruff format --check .
+	ruff check .
+
+check: lint
 
 test:
 	pytest .
