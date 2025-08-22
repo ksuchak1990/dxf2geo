@@ -117,6 +117,20 @@ FilterOptions(
 )
 ```
 
+### Layer name (regular expressions)
+
+We can also filter layers using **regular expressions** (applied to the CAD
+layer name).
+
+```python
+FilterOptions(
+    # Include any "roads" or "road" layer (case-insensitive), and any layer starting with "bldg_"
+    include_layer_patterns=(r"(?i)^roads?$", r"^bldg_.*"),
+    # Exclude layers named "defpoints" (any case) or prefixed with "tmp_"
+    exclude_layer_patterns=(r"(?i)^defpoints$", r"^tmp_"),
+)
+```
+
 ### Geometry size/structure
 
 ```python
