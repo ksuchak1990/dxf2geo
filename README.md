@@ -176,3 +176,7 @@ extract_geometries(
 
 `dxf2geo` is distributed under the terms of the
 [MIT](https://spdx.org/licenses/MIT.html) license.
+
+## Funding
+
+This package is being developed as part of work on the [EPSRC Digital Health Hub for Antimicrobial Resistance](https://www.digitalamr.org/) (EP/X031276/1).
