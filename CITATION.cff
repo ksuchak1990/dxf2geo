@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+title: dxf2geo
+message: If you use this software, please cite it.
+type: software
+authors:
+  - family-names: Suchak
+    given-names: Keiran
+    orcid: "https://orcid.org/0000-0002-7008-2027"
+repository-code: "https://github.com/ksuchak1990/dxf2geo"
+url: "https://pypi.org/project/dxf2geo/"
+abstract: "Converting CAD `.dxf` files into geospatial formats."
+license: MIT
+keywords: [python, pypi, geospatial, gis]
+version: 0.1.3
+doi: 10.5281/zenodo.17174880
+preferred-citation:
+  type: software
+  title: dxf2geo
+  authors:
+    - family-names: Suchak
+      given-names: Keiran
+  year: 2025
+  10.5281/zenodo.17174880
