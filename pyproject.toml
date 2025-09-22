@@ -50,6 +50,7 @@ dev = [
 Homepage = "https://github.com/ksuchak1990/dxf2geo"
 Repository = "https://github.com/ksuchak1990/dxf2geo"
 Issues = "https://github.com/ksuchak1990/dxf2geo/issues"
+DOI = "https://doi.org/10.5281/zenodo.17174880"
 
 [tool.setuptools.packages.find]
 where = ["src"]
