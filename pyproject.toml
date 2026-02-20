@@ -7,14 +7,13 @@ name = "dxf2geo"
 version = "0.1.4"
 description = "Convert CAD DXF data into geospatial formats and visualisations using GeoPandas/Pyogrio."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = { file = "LICENSE" }
 authors = [{ name = "Keiran Suchak" }]
-keywords = ["GDAL", "DXF", "geospatial", "GIS", "vector", "conversion"]
+keywords = ["DXF", "geospatial", "GIS", "vector", "conversion"]
+
 classifiers = [
   "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "License :: OSI Approved :: MIT License",
@@ -29,11 +28,12 @@ dependencies = [
   "pandas>=2.0",
   "plotly>=5",
   "tqdm>=4.66",
-  "gdal>=3.12.1",
   "ezdxf>=1.4.3",
 ]
 
 [project.optional-dependencies]
+gdal = ["gdal>=3.12.1"]
+
 dev = [
   "pytest",
   "pytest-mock",
@@ -41,11 +41,6 @@ dev = [
   "black",
   "build",
   "twine",
-  "ezdxf",
-  "geopandas",
-  "shapely", 
-  "pyproj", 
-  "plotly",
 ]
 
 [project.urls]
@@ -58,7 +53,7 @@ DOI = "https://doi.org/10.5281/zenodo.17174880"
 where = ["src"]
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py312"
 line-length = 88
 
 [tool.ruff.lint]
