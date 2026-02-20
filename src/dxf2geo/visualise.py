@@ -350,30 +350,6 @@ def filter_modelspace_lines(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 
 
 def plot_geometries(gdf: gpd.GeoDataFrame, output_html: Path | str) -> None:
-    """
-    Plot geometries into an interactive HTML file using Plotly.
-
-    The output groups features by ``geometry_type`` and draws points, lines,
-    and polygon exteriors with simple defaults. Non-geometry columns are
-    rendered as hover text.
-
-    Parameters
-    ----------
-    gdf : geopandas.GeoDataFrame
-        Input features. Must contain ``geometry`` and ``geometry_type`` columns.
-    output_html : path-like
-        Destination path for the generated HTML file.
-
-    Returns
-    -------
-    None
-
-    Notes
-    -----
-    - The figure uses an equal-scale axis (``yaxis_scaleanchor='x'``).
-    - ``plotly`` is used directly without specifying a theme to keep
-      dependencies light.
-    """
     fig = go.Figure()
     geometry_types = gdf.geometry_type.unique()
 
@@ -381,8 +357,10 @@ def plot_geometries(gdf: gpd.GeoDataFrame, output_html: Path | str) -> None:
         layer = gdf[gdf["geometry_type"] == geom_type]
         if layer.empty:
             continue
+
         elif geom_type in {"POINT", "MULTIPOINT"}:
             xs, ys, hover = [], [], []
+
             for _, row in layer.iterrows():
                 if geom_type == "POINT":
                     xs.append(row.geometry.x)
@@ -393,6 +371,7 @@ def plot_geometries(gdf: gpd.GeoDataFrame, output_html: Path | str) -> None:
                         xs.append(pt.x)
                         ys.append(pt.y)
                         hover.append(format_hovertext(row))
+
             fig.add_trace(
                 go.Scatter(
                     x=xs,
@@ -404,19 +383,23 @@ def plot_geometries(gdf: gpd.GeoDataFrame, output_html: Path | str) -> None:
                     hoverinfo="text",
                 )
             )
+
         elif geom_type in {"LINESTRING", "MULTILINESTRING"}:
             all_x, all_y, hovertext = [], [], []
+
             for _, row in layer.iterrows():
                 segments = (
                     [row.geometry.coords]
                     if geom_type == "LINESTRING"
                     else [line.coords for line in row.geometry.geoms]
                 )
+
                 for seg in segments:
                     xs, ys = _coords_to_xy(seg)
                     all_x.extend(xs + [None])
                     all_y.extend(ys + [None])
                     hovertext.extend([format_hovertext(row)] * (len(xs) + 1))
+
             fig.add_trace(
                 go.Scatter(
                     x=all_x,
@@ -428,25 +411,47 @@ def plot_geometries(gdf: gpd.GeoDataFrame, output_html: Path | str) -> None:
                     line={"width": 1},
                 )
             )
+
         elif geom_type in {"POLYGON", "MULTIPOLYGON"}:
-            all_x, all_y, hovertext = [], [], []
+            all_x, all_y = [], []
+            centroid_x, centroid_y, centroid_hover = [], [], []
+
             for _, row in layer.iterrows():
                 polys = [row.geometry] if geom_type == "POLYGON" else row.geometry.geoms
+
                 for poly in polys:
                     xs, ys = _coords_to_xy(poly.exterior.coords)
                     all_x.extend(xs + [None])
                     all_y.extend(ys + [None])
-                    hovertext.extend([format_hovertext(row)] * (len(xs) + 1))
+
+                rep_pt = row.geometry.representative_point()
+                centroid_x.append(rep_pt.x)
+                centroid_y.append(rep_pt.y)
+                centroid_hover.append(format_hovertext(row))
+
+            # Polygon fill trace (no hover)
             fig.add_trace(
                 go.Scatter(
                     x=all_x,
                     y=all_y,
                     mode="lines",
                     name=geom_type,
-                    text=hovertext,
-                    hoverinfo="text",
                     fill="toself",
                     opacity=0.4,
+                    hoverinfo="skip",
+                )
+            )
+
+            # Invisible hover trace
+            fig.add_trace(
+                go.Scatter(
+                    x=centroid_x,
+                    y=centroid_y,
+                    mode="markers",
+                    marker={"size": 8, "opacity": 0},
+                    text=centroid_hover,
+                    hoverinfo="text",
+                    showlegend=False,
                 )
             )
 
